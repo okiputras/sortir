@@ -129,6 +129,10 @@ if not hist.empty:
                 sess_rows[["Produk", "Qty", "Harga Satuan", "Subtotal"]],
                 hide_index=True,
                 width="stretch",
+                column_config={
+                    "Harga Satuan": st.column_config.NumberColumn(format="%,d"),
+                    "Subtotal": st.column_config.NumberColumn(format="%,d"),
+                },
             )
             bcol1, bcol2 = st.columns(2)
             if bcol1.button("Edit sesi ini", key=f"edit_{sid}", width="stretch"):
@@ -194,7 +198,15 @@ for _, row in edited.iterrows():
 
 if preview_rows:
     st.write("Preview:")
-    st.dataframe(pd.DataFrame(preview_rows), hide_index=True, width="stretch")
+    st.dataframe(
+        pd.DataFrame(preview_rows),
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "Harga Satuan": st.column_config.NumberColumn(format="%,d"),
+            "Subtotal": st.column_config.NumberColumn(format="%,d"),
+        },
+    )
     st.markdown(f"**Total: {format_rupiah(total)}**")
 
 if st.button("Simpan", type="primary", disabled=not preview_rows, width="stretch"):

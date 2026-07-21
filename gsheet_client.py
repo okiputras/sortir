@@ -42,8 +42,7 @@ LAPORAN_HEADER = [
     "Qris",
     "Debit",
     "Tf",
-    "Tarik Tunai",
-    "Tukar Uang",
+    "Tarik Tunai / Tukar Uang",
     "Total",
     "Timestamp",
 ]

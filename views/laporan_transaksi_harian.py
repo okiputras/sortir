@@ -6,9 +6,10 @@ Rumus Total:
     - Pakai Petty Cash:       Total = Cash - Qris - Debit - Tf
       (Jumlah pengeluaran tidak dikurangi lagi karena sudah dibayar dari Petty Cash)
 
-Modal, Tarik Tunai, dan Tukar Uang cuma informasi -- tidak mempengaruhi Total.
+Modal dan Tarik Tunai / Tukar Uang cuma informasi -- tidak mempengaruhi Total.
 """
 
+import re
 import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -34,8 +35,7 @@ NUMERIC_FIELDS = [
     "lap_qris",
     "lap_debit",
     "lap_tf",
-    "lap_tarik_tunai",
-    "lap_tukar_uang",
+    "lap_tarik_tukar",
 ]
 
 
@@ -52,6 +52,42 @@ def to_number(value) -> float:
         return float(value or 0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _format_thousands(value) -> str:
+    n = int(to_number(value))
+    return f"{n:,}".replace(",", ".")
+
+
+def _digits_to_number(raw: str) -> float:
+    digits = re.sub(r"[^\d]", "", raw or "")
+    return float(digits) if digits else 0.0
+
+
+def _reformat_on_change(widget_key: str) -> None:
+    st.session_state[widget_key] = _format_thousands(
+        _digits_to_number(st.session_state[widget_key])
+    )
+
+
+def rupiah_input(label: str, state_key: str, help: str | None = None) -> float:
+    """Input angka dengan tampilan pemisah ribuan titik ala Indonesia
+    (mis. 5.000), bukan angka polos. Nilai kanonik (float) disimpan balik
+    ke session_state[state_key] supaya bisa dibaca kode lain (mis. rumus
+    Total) dan supaya prefill saat mode edit tetap konsisten."""
+    widget_key = f"{state_key}_input_{st.session_state.lap_form_version}"
+    if widget_key not in st.session_state:
+        st.session_state[widget_key] = _format_thousands(st.session_state[state_key])
+    st.text_input(
+        label,
+        key=widget_key,
+        on_change=_reformat_on_change,
+        args=(widget_key,),
+        help=help,
+    )
+    value = _digits_to_number(st.session_state[widget_key])
+    st.session_state[state_key] = value
+    return value
 
 
 def reset_form() -> None:
@@ -128,6 +164,8 @@ if not laporan_df.empty:
 else:
     hist = pd.DataFrame()
 
+RUPIAH_COL_FORMAT = "%,d"
+
 if not hist.empty:
     st.subheader("Riwayat 2 sesi terakhir")
     last_ts = hist.groupby("Session ID")["Timestamp"].max().sort_values(ascending=False)
@@ -144,7 +182,12 @@ if not hist.empty:
             if not items.empty:
                 st.write("Pengeluaran:")
                 st.dataframe(
-                    items[["Keterangan", "Nominal"]], hide_index=True, width="stretch"
+                    items[["Keterangan", "Nominal"]],
+                    hide_index=True,
+                    width="stretch",
+                    column_config={
+                        "Nominal": st.column_config.NumberColumn(format=RUPIAH_COL_FORMAT)
+                    },
                 )
 
             ringkasan = {
@@ -154,8 +197,9 @@ if not hist.empty:
                 "Qris": format_rupiah(first.get("Qris")),
                 "Debit": format_rupiah(first.get("Debit")),
                 "Tf": format_rupiah(first.get("Tf")),
-                "Tarik Tunai": format_rupiah(first.get("Tarik Tunai")),
-                "Tukar Uang": format_rupiah(first.get("Tukar Uang")),
+                "Tarik Tunai / Tukar Uang": format_rupiah(
+                    first.get("Tarik Tunai / Tukar Uang")
+                ),
             }
             st.dataframe(
                 pd.DataFrame(ringkasan.items(), columns=["Field", "Nilai"]),
@@ -175,8 +219,9 @@ if not hist.empty:
                 st.session_state.lap_qris = to_number(first.get("Qris"))
                 st.session_state.lap_debit = to_number(first.get("Debit"))
                 st.session_state.lap_tf = to_number(first.get("Tf"))
-                st.session_state.lap_tarik_tunai = to_number(first.get("Tarik Tunai"))
-                st.session_state.lap_tukar_uang = to_number(first.get("Tukar Uang"))
+                st.session_state.lap_tarik_tukar = to_number(
+                    first.get("Tarik Tunai / Tukar Uang")
+                )
                 st.session_state.lap_editing_id = sid
                 st.session_state.lap_form_version += 1
                 st.rerun()
@@ -200,16 +245,10 @@ if st.session_state.lap_editing_id:
 st.subheader("Modal & Petty Cash")
 c1, c2 = st.columns(2)
 with c1:
-    modal = st.number_input(
-        "Modal (Rp)", min_value=0.0, step=1000.0,
-        value=st.session_state.lap_modal,
-        key=f"lap_modal_input_{st.session_state.lap_form_version}",
-    )
+    modal = rupiah_input("Modal (Rp)", "lap_modal")
 with c2:
-    petty_awal = st.number_input(
-        "Petty Cash Awal (Rp) — opsional", min_value=0.0, step=1000.0,
-        value=st.session_state.lap_petty_awal,
-        key=f"lap_petty_input_{st.session_state.lap_form_version}",
+    petty_awal = rupiah_input(
+        "Petty Cash Awal (Rp) — opsional", "lap_petty_awal",
         help="Kosongkan (0) kalau shift ini tidak pakai petty cash.",
     )
 
@@ -223,7 +262,7 @@ edited = st.data_editor(
     column_config={
         "Keterangan": st.column_config.TextColumn("Keterangan", required=False),
         "Nominal": st.column_config.NumberColumn(
-            "Nominal", min_value=0.0, step=1000.0, required=False
+            "Nominal", min_value=0.0, step=1000.0, required=False, format=RUPIAH_COL_FORMAT
         ),
     },
     hide_index=True,
@@ -251,39 +290,16 @@ if pakai_petty_cash:
 st.subheader("Pembayaran")
 c1, c2 = st.columns(2)
 with c1:
-    cash = st.number_input(
-        "Cash (Rp)", min_value=0.0, step=1000.0,
-        value=st.session_state.lap_cash,
-        key=f"lap_cash_input_{st.session_state.lap_form_version}",
-    )
-    debit = st.number_input(
-        "Debit (Rp)", min_value=0.0, step=1000.0,
-        value=st.session_state.lap_debit,
-        key=f"lap_debit_input_{st.session_state.lap_form_version}",
-    )
-    tarik_tunai = st.number_input(
-        "Tarik Tunai (Rp)", min_value=0.0, step=1000.0,
-        value=st.session_state.lap_tarik_tunai,
-        key=f"lap_tariktunai_input_{st.session_state.lap_form_version}",
-        help="Informasi saja, tidak mempengaruhi rumus Total.",
-    )
+    cash = rupiah_input("Cash (Rp)", "lap_cash")
+    debit = rupiah_input("Debit (Rp)", "lap_debit")
 with c2:
-    qris = st.number_input(
-        "Qris (Rp)", min_value=0.0, step=1000.0,
-        value=st.session_state.lap_qris,
-        key=f"lap_qris_input_{st.session_state.lap_form_version}",
-    )
-    tf = st.number_input(
-        "Tf (Rp)", min_value=0.0, step=1000.0,
-        value=st.session_state.lap_tf,
-        key=f"lap_tf_input_{st.session_state.lap_form_version}",
-    )
-    tukar_uang = st.number_input(
-        "Tukar Uang (Rp)", min_value=0.0, step=1000.0,
-        value=st.session_state.lap_tukar_uang,
-        key=f"lap_tukaruang_input_{st.session_state.lap_form_version}",
-        help="Informasi saja, tidak mempengaruhi rumus Total.",
-    )
+    qris = rupiah_input("Qris (Rp)", "lap_qris")
+    tf = rupiah_input("Tf (Rp)", "lap_tf")
+
+tarik_tukar = rupiah_input(
+    "Tarik Tunai / Tukar Uang (Rp)", "lap_tarik_tukar",
+    help="Informasi saja, tidak mempengaruhi rumus Total.",
+)
 
 # --- rumus Total ---
 if pakai_petty_cash:
@@ -312,8 +328,7 @@ if st.button("Simpan", type="primary", width="stretch"):
         "Qris": qris,
         "Debit": debit,
         "Tf": tf,
-        "Tarik Tunai": tarik_tunai,
-        "Tukar Uang": tukar_uang,
+        "Tarik Tunai / Tukar Uang": tarik_tukar,
         "Total": total,
         "Timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
     }
