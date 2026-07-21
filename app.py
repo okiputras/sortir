@@ -52,8 +52,12 @@ if "editing_session_id" not in st.session_state:
     st.session_state.editing_session_id = None
 
 # --- load semua data sekaligus (paralel, bukan berurutan) ---
-with st.spinner("Memuat data..."):
-    data = load_all()
+try:
+    with st.spinner("Memuat data..."):
+        data = load_all()
+except RuntimeError as e:
+    st.error(str(e))
+    st.stop()
 produk_records = data["produk"]
 cabang_records = data["cabang"]
 karyawan_records = data["karyawan"]

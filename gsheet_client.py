@@ -56,7 +56,7 @@ def _load_spreadsheet_id() -> str:
         return st.secrets["spreadsheet_id"]
     env_id = os.environ.get("SPREADSHEET_ID")
     if env_id:
-        return env_id
+        return env_id.strip()
     with open("spreadsheet_id.txt") as f:
         return f.read().strip()
 
@@ -65,7 +65,18 @@ def _load_spreadsheet_id() -> str:
 def get_spreadsheet():
     creds = _load_credentials()
     client = gspread.authorize(creds)
-    return client.open_by_key(_load_spreadsheet_id())
+    spreadsheet_id = _load_spreadsheet_id()
+    try:
+        return client.open_by_key(spreadsheet_id)
+    except gspread.exceptions.SpreadsheetNotFound as e:
+        raise RuntimeError(
+            "Spreadsheet tidak ditemukan / tidak bisa diakses.\n\n"
+            f"- SPREADSHEET_ID yang dipakai: `{spreadsheet_id or '(KOSONG)'}`\n"
+            f"- Service account: `{creds.service_account_email}`\n\n"
+            "Cek: (1) env var SPREADSHEET_ID di Railway sudah benar & tidak ada "
+            "spasi/quote nyelip, (2) spreadsheet sudah di-share sebagai Editor "
+            "ke email service account di atas."
+        ) from e
 
 
 @st.cache_data(ttl=300, show_spinner=False)
