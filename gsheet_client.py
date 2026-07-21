@@ -1,6 +1,6 @@
 """
-Koneksi ke Google Sheets & fungsi CRUD untuk sheet "Sortir".
-Dipakai oleh app.py.
+Koneksi ke Google Sheets & fungsi CRUD untuk sheet "Sortir" dan
+"Laporan Harian". Dipakai oleh app.py dan pages/*.py.
 """
 
 import json
@@ -26,6 +26,25 @@ SORTIR_HEADER = [
     "Qty",
     "Harga Satuan",
     "Subtotal",
+    "Timestamp",
+]
+
+LAPORAN_HEADER = [
+    "Session ID",
+    "Tanggal",
+    "Nama",
+    "Cabang",
+    "Keterangan",
+    "Nominal",
+    "Modal",
+    "Petty Cash Awal",
+    "Cash",
+    "Qris",
+    "Debit",
+    "Tf",
+    "Tarik Tunai",
+    "Tukar Uang",
+    "Total",
     "Timestamp",
 ]
 
@@ -120,40 +139,57 @@ def load_sortir():
     return ws.get_all_records()
 
 
-def load_all() -> dict:
-    """Ambil Produk/Cabang/Karyawan/Sortir sekaligus secara paralel.
+@st.cache_data(ttl=30, show_spinner=False)
+def load_laporan():
+    ws = get_spreadsheet().worksheet("Laporan Harian")
+    return ws.get_all_records()
 
-    Tiap sheet adalah 1 network call ke Google Sheets (~0.8-1s, didominasi
-    latency tetap per-request, bukan ukuran data). Kalau dipanggil berurutan
-    totalnya ~3-4 detik; paralel memangkas jadi ~waktu call paling lambat.
-    """
+
+def _parallel_load(jobs: dict) -> dict:
+    """Jalankan beberapa fungsi loader sekaligus secara paralel (bukan
+    berurutan) supaya latency network per-request tidak menumpuk."""
     ctx = get_script_run_ctx()
 
     def _run(fn):
         add_script_run_ctx(ctx=ctx)
         return fn()
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        futures = {
-            "produk": ex.submit(_run, load_produk),
-            "cabang": ex.submit(_run, load_cabang),
-            "karyawan": ex.submit(_run, load_karyawan),
-            "sortir": ex.submit(_run, load_sortir),
-        }
+    with ThreadPoolExecutor(max_workers=max(len(jobs), 1)) as ex:
+        futures = {k: ex.submit(_run, fn) for k, fn in jobs.items()}
         return {k: f.result() for k, f in futures.items()}
 
 
-def append_session(rows: list[dict]) -> None:
-    ws = get_spreadsheet().worksheet("Sortir")
-    values = [[row.get(col, "") for col in SORTIR_HEADER] for row in rows]
+def load_all() -> dict:
+    """Data untuk halaman Input Sortir: Produk/Cabang/Karyawan/Sortir."""
+    return _parallel_load(
+        {
+            "produk": load_produk,
+            "cabang": load_cabang,
+            "karyawan": load_karyawan,
+            "sortir": load_sortir,
+        }
+    )
+
+
+def load_all_laporan() -> dict:
+    """Data untuk halaman Laporan Transaksi Harian: Cabang/Karyawan/Laporan."""
+    return _parallel_load(
+        {
+            "cabang": load_cabang,
+            "karyawan": load_karyawan,
+            "laporan": load_laporan,
+        }
+    )
+
+
+def _append_rows(sheet_name: str, header: list[str], rows: list[dict]) -> None:
+    ws = get_spreadsheet().worksheet(sheet_name)
+    values = [[row.get(col, "") for col in header] for row in rows]
     ws.append_rows(values, value_input_option="USER_ENTERED")
-    # Cuma invalidate cache Sortir -- jangan clear cache Produk/Cabang/Karyawan
-    # (Produk isinya 1442 baris, narik ulang tiap Simpan/Hapus itu yang bikin lemot).
-    load_sortir.clear()
 
 
-def delete_session(session_id: str) -> None:
-    ws = get_spreadsheet().worksheet("Sortir")
+def _delete_session_rows(sheet_name: str, session_id: str) -> None:
+    ws = get_spreadsheet().worksheet(sheet_name)
     matches = ws.findall(session_id, in_column=1)
     if matches:
         rows = sorted({c.row for c in matches}, reverse=True)
@@ -171,9 +207,35 @@ def delete_session(session_id: str) -> None:
             for r in rows
         ]
         get_spreadsheet().batch_update({"requests": requests})
+
+
+def append_session(rows: list[dict]) -> None:
+    _append_rows("Sortir", SORTIR_HEADER, rows)
+    # Cuma invalidate cache Sortir -- jangan clear cache Produk/Cabang/Karyawan
+    # (Produk isinya ratusan baris, narik ulang tiap Simpan/Hapus itu yang bikin lemot).
+    load_sortir.clear()
+
+
+def delete_session(session_id: str) -> None:
+    _delete_session_rows("Sortir", session_id)
     load_sortir.clear()
 
 
 def update_session(session_id: str, new_rows: list[dict]) -> None:
     delete_session(session_id)
     append_session(new_rows)
+
+
+def append_laporan(rows: list[dict]) -> None:
+    _append_rows("Laporan Harian", LAPORAN_HEADER, rows)
+    load_laporan.clear()
+
+
+def delete_laporan(session_id: str) -> None:
+    _delete_session_rows("Laporan Harian", session_id)
+    load_laporan.clear()
+
+
+def update_laporan(session_id: str, new_rows: list[dict]) -> None:
+    delete_laporan(session_id)
+    append_laporan(new_rows)
