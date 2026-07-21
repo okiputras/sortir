@@ -38,6 +38,13 @@ def _secrets_available() -> bool:
     )
 
 
+def _strip_wrapping_quotes(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        value = value[1:-1].strip()
+    return value
+
+
 def _load_credentials() -> Credentials:
     # Urutan prioritas: Streamlit secrets (Streamlit Cloud) -> env var (Railway
     # / host lain) -> file lokal (dev di laptop).
@@ -47,7 +54,17 @@ def _load_credentials() -> Credentials:
         )
     env_json = os.environ.get("GCP_SERVICE_ACCOUNT_JSON")
     if env_json:
-        return Credentials.from_service_account_info(json.loads(env_json), scopes=SCOPES)
+        env_json = _strip_wrapping_quotes(env_json)
+        try:
+            info = json.loads(env_json)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(
+                "Env var GCP_SERVICE_ACCOUNT_JSON isinya bukan JSON yang valid "
+                f"(gagal parse: {e}). Pastikan paste SELURUH isi file "
+                "service_account.json apa adanya (termasuk { } di awal-akhir), "
+                "jangan cuma sebagian atau ada karakter yang ke-strip."
+            ) from e
+        return Credentials.from_service_account_info(info, scopes=SCOPES)
     return Credentials.from_service_account_file("service_account.json", scopes=SCOPES)
 
 
@@ -56,7 +73,7 @@ def _load_spreadsheet_id() -> str:
         return st.secrets["spreadsheet_id"]
     env_id = os.environ.get("SPREADSHEET_ID")
     if env_id:
-        return env_id.strip()
+        return _strip_wrapping_quotes(env_id)
     with open("spreadsheet_id.txt") as f:
         return f.read().strip()
 
