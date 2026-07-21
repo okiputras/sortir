@@ -1,0 +1,5 @@
+google-auth==2.56.0
+gspread==6.2.1
+numpy==2.5.1
+pandas==3.0.3
+streamlit==1.59.2
