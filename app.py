@@ -13,12 +13,13 @@ st.set_page_config(page_title="Toko Sayur", page_icon="🥬", layout="centered")
 
 pg = st.navigation(
     [
-        st.Page("views/input_sortir.py", title="Input Sortir", icon="🥬", default=True),
         st.Page(
             "views/laporan_transaksi_harian.py",
             title="Laporan Transaksi Harian",
             icon="🧾",
+            default=True,
         ),
+        st.Page("views/input_sortir.py", title="Input Sortir", icon="🥬"),
     ]
 )
 pg.run()
