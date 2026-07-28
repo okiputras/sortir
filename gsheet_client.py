@@ -135,13 +135,16 @@ def load_karyawan():
 @st.cache_data(ttl=30, show_spinner=False)
 def load_sortir():
     ws = get_spreadsheet().worksheet("Sortir")
-    return ws.get_all_records()
+    # Baris yang di-soft-delete (lihat _delete_session_rows) isinya
+    # dikosongkan, bukan dihapus fisik -- filter di sini biar tidak
+    # nongol sebagai baris kosong di UI.
+    return [r for r in ws.get_all_records() if r.get("Session ID")]
 
 
 @st.cache_data(ttl=30, show_spinner=False)
 def load_laporan():
     ws = get_spreadsheet().worksheet("Laporan Harian")
-    return ws.get_all_records()
+    return [r for r in ws.get_all_records() if r.get("Session ID")]
 
 
 def _parallel_load(jobs: dict) -> dict:
@@ -188,24 +191,23 @@ def _append_rows(sheet_name: str, header: list[str], rows: list[dict]) -> None:
 
 
 def _delete_session_rows(sheet_name: str, session_id: str) -> None:
+    """Kosongkan isi baris yang match (soft-delete), BUKAN hapus baris fisik.
+
+    Hapus fisik (deleteDimension) menggeser index semua baris di
+    bawahnya. Kalau ada user lain yang barengan nulis/edit/hapus, delete
+    berikutnya yang masih pakai index lama (hasil findall sebelum baris
+    bergeser) bisa kena baris yang SALAH -- data user lain ketimpa atau
+    ikut kehapus. Ini akar penyebab laporan "data kosong" / "nama
+    berubah" pas dipakai bareng-bareng. Clear isi baris tidak menggeser
+    apapun, jadi aman dipakai concurrent oleh banyak user.
+    """
     ws = get_spreadsheet().worksheet(sheet_name)
     matches = ws.findall(session_id, in_column=1)
     if matches:
-        rows = sorted({c.row for c in matches}, reverse=True)
-        requests = [
-            {
-                "deleteDimension": {
-                    "range": {
-                        "sheetId": ws.id,
-                        "dimension": "ROWS",
-                        "startIndex": r - 1,
-                        "endIndex": r,
-                    }
-                }
-            }
-            for r in rows
-        ]
-        get_spreadsheet().batch_update({"requests": requests})
+        rows = sorted({c.row for c in matches})
+        last_col_letter = gspread.utils.rowcol_to_a1(1, ws.col_count)[:-1]
+        ranges = [f"A{r}:{last_col_letter}{r}" for r in rows]
+        ws.batch_clear(ranges)
 
 
 def append_session(rows: list[dict]) -> None:

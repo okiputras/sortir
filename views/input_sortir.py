@@ -95,12 +95,12 @@ with col1:
 is_editing = bool(st.session_state.editing_session_id)
 with col2:
     cabang = st.selectbox(
-        "Cabang", cabang_list, disabled=is_editing,
+        "Cabang", cabang_list, disabled=is_editing, key="cabang_select",
         help="Batal edit dulu untuk ganti cabang." if is_editing else None,
     )
 
 nama = st.selectbox(
-    "Nama Karyawan", karyawan_list, disabled=is_editing,
+    "Nama Karyawan", karyawan_list, disabled=is_editing, key="nama_select",
     help="Batal edit dulu untuk ganti nama karyawan." if is_editing else None,
 )
 
