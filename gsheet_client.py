@@ -5,12 +5,19 @@ Koneksi ke Google Sheets & fungsi CRUD untuk sheet "Sortir" dan
 
 import json
 import os
+import random
+import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+
+LOCK_SHEET = "_Lock"
+LOCK_TIMEOUT_SECONDS = 15
+LOCK_MAX_WAIT_SECONDS = 25
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -184,6 +191,54 @@ def load_all_laporan() -> dict:
     )
 
 
+def _ensure_lock_sheet():
+    sh = get_spreadsheet()
+    titles = {ws.title for ws in sh.worksheets()}
+    if LOCK_SHEET not in titles:
+        ws = sh.add_worksheet(title=LOCK_SHEET, rows=2, cols=2)
+        ws.update([["token", "acquired_at"]], "A1")
+        return ws
+    return sh.worksheet(LOCK_SHEET)
+
+
+def _acquire_lock() -> str:
+    """Lock sederhana lewat 1 sel di sheet "_Lock", supaya operasi yang
+    menggeser baris (hapus/edit) dari user berbeda tidak pernah overlap.
+
+    Bukan lock atomik sempurna (Google Sheets tidak punya compare-and-swap
+    bawaan), tapi kombinasi tulis-lalu-verifikasi + retry ini menekan
+    peluang tabrakan sampai sangat kecil untuk skala pemakaian toko kecil
+    (segelintir karyawan, bukan ratusan request per detik). Lock basi
+    (>LOCK_TIMEOUT_SECONDS) dianggap terlepas otomatis, jaga-jaga kalau
+    ada proses yang crash sebelum sempat release.
+    """
+    ws = _ensure_lock_sheet()
+    token = str(uuid.uuid4())
+    deadline = time.time() + LOCK_MAX_WAIT_SECONDS
+    while time.time() < deadline:
+        row = ws.row_values(2)
+        current_token = row[0] if row else ""
+        current_ts = float(row[1]) if len(row) > 1 and row[1] else 0.0
+        if not current_token or (time.time() - current_ts) > LOCK_TIMEOUT_SECONDS:
+            ws.update([[token, str(time.time())]], "A2")
+            time.sleep(0.3)  # kasih waktu write kepropagasi, lalu verifikasi
+            row2 = ws.row_values(2)
+            if row2 and row2[0] == token:
+                return token
+        time.sleep(random.uniform(0.2, 0.6))
+    raise RuntimeError(
+        "Sistem sedang sibuk (ada yang lain sedang edit/hapus data). "
+        "Coba klik Simpan/Hapus lagi sebentar."
+    )
+
+
+def _release_lock(token: str) -> None:
+    ws = _ensure_lock_sheet()
+    row = ws.row_values(2)
+    if row and row[0] == token:
+        ws.update([["", ""]], "A2")
+
+
 def _append_rows(sheet_name: str, header: list[str], rows: list[dict]) -> None:
     ws = get_spreadsheet().worksheet(sheet_name)
     values = [[row.get(col, "") for col in header] for row in rows]
@@ -191,23 +246,32 @@ def _append_rows(sheet_name: str, header: list[str], rows: list[dict]) -> None:
 
 
 def _delete_session_rows(sheet_name: str, session_id: str) -> None:
-    """Kosongkan isi baris yang match (soft-delete), BUKAN hapus baris fisik.
-
-    Hapus fisik (deleteDimension) menggeser index semua baris di
-    bawahnya. Kalau ada user lain yang barengan nulis/edit/hapus, delete
-    berikutnya yang masih pakai index lama (hasil findall sebelum baris
-    bergeser) bisa kena baris yang SALAH -- data user lain ketimpa atau
-    ikut kehapus. Ini akar penyebab laporan "data kosong" / "nama
-    berubah" pas dipakai bareng-bareng. Clear isi baris tidak menggeser
-    apapun, jadi aman dipakai concurrent oleh banyak user.
-    """
-    ws = get_spreadsheet().worksheet(sheet_name)
-    matches = ws.findall(session_id, in_column=1)
-    if matches:
-        rows = sorted({c.row for c in matches})
-        last_col_letter = gspread.utils.rowcol_to_a1(1, ws.col_count)[:-1]
-        ranges = [f"A{r}:{last_col_letter}{r}" for r in rows]
-        ws.batch_clear(ranges)
+    """Hapus baris fisik (deleteDimension) -- sheet tetap bersih, tidak
+    menumpuk baris kosong. Dilindungi lock (_acquire_lock/_release_lock)
+    supaya tidak overlap dengan delete/edit user lain yang jalan
+    bersamaan, karena hapus fisik menggeser index baris di bawahnya."""
+    token = _acquire_lock()
+    try:
+        ws = get_spreadsheet().worksheet(sheet_name)
+        matches = ws.findall(session_id, in_column=1)
+        if matches:
+            rows = sorted({c.row for c in matches}, reverse=True)
+            requests = [
+                {
+                    "deleteDimension": {
+                        "range": {
+                            "sheetId": ws.id,
+                            "dimension": "ROWS",
+                            "startIndex": r - 1,
+                            "endIndex": r,
+                        }
+                    }
+                }
+                for r in rows
+            ]
+            get_spreadsheet().batch_update({"requests": requests})
+    finally:
+        _release_lock(token)
 
 
 def append_session(rows: list[dict]) -> None:
