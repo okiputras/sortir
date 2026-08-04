@@ -54,6 +54,16 @@ LAPORAN_HEADER = [
     "Timestamp",
 ]
 
+OPERASIONAL_HEADER = [
+    "Session ID",
+    "Tanggal",
+    "Cabang",
+    "Kategori",
+    "Keterangan",
+    "Nominal",
+    "Timestamp",
+]
+
 
 def _secrets_available() -> bool:
     # Mengakses st.secrets tanpa file secrets.toml sama sekali akan raise
@@ -154,6 +164,12 @@ def load_laporan():
     return [r for r in ws.get_all_records() if r.get("Session ID")]
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def load_operasional():
+    ws = get_spreadsheet().worksheet("Pengeluaran Operasional")
+    return [r for r in ws.get_all_records() if r.get("Session ID")]
+
+
 def _parallel_load(jobs: dict) -> dict:
     """Jalankan beberapa fungsi loader sekaligus secara paralel (bukan
     berurutan) supaya latency network per-request tidak menumpuk."""
@@ -187,6 +203,16 @@ def load_all_laporan() -> dict:
             "cabang": load_cabang,
             "karyawan": load_karyawan,
             "laporan": load_laporan,
+        }
+    )
+
+
+def load_all_operasional() -> dict:
+    """Data untuk halaman Pengeluaran Operasional: Cabang/Operasional."""
+    return _parallel_load(
+        {
+            "cabang": load_cabang,
+            "operasional": load_operasional,
         }
     )
 
@@ -304,3 +330,18 @@ def delete_laporan(session_id: str) -> None:
 def update_laporan(session_id: str, new_rows: list[dict]) -> None:
     delete_laporan(session_id)
     append_laporan(new_rows)
+
+
+def append_operasional(rows: list[dict]) -> None:
+    _append_rows("Pengeluaran Operasional", OPERASIONAL_HEADER, rows)
+    load_operasional.clear()
+
+
+def delete_operasional(session_id: str) -> None:
+    _delete_session_rows("Pengeluaran Operasional", session_id)
+    load_operasional.clear()
+
+
+def update_operasional(session_id: str, new_rows: list[dict]) -> None:
+    delete_operasional(session_id)
+    append_operasional(new_rows)
