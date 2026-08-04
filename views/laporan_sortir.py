@@ -202,7 +202,103 @@ else:
     )
 
 # ======================================================================
-# 4. ESTIMASI DAMPAK KE MARGIN/PROFIT
+# 4. INSIGHT & REKOMENDASI AKSI
+# ======================================================================
+st.subheader("🎯 Insight & Rekomendasi Aksi")
+
+pivot = df_f.groupby(["Produk", "minggu"])["Subtotal"].sum().unstack(fill_value=0)
+pivot = pivot.reindex(columns=minggu_tersedia, fill_value=0)
+n_minggu = len(minggu_tersedia)
+
+if n_minggu < 2:
+    st.caption(
+        "Butuh minimal 2 minggu data untuk insight berulang/lonjakan/rekomendasi kurangi order. "
+        "Baru ada 1 minggu data."
+    )
+else:
+    if n_minggu < 4:
+        st.caption(
+            f"ℹ️ Baru ada {n_minggu} minggu data, jadi status \"Berulang\" & saran di bawah ini masih "
+            "**awal/kasar** -- gampang sekali produk kelihatan \"berulang\" padahal cuma kebetulan muncul "
+            "di kedua-duanya. Makin akurat & bisa dipercaya setelah 4+ minggu data terkumpul. "
+            "Untuk sekarang, pakai sebagai starting point, bukan keputusan final."
+        )
+
+    muncul_ratio = (pivot > 0).sum(axis=1) / n_minggu
+    nilai_minggu_ini = pivot[minggu_ini]
+    minggu_sebelum = [m for m in minggu_tersedia if m != minggu_ini]
+    baseline = pivot[minggu_sebelum].mean(axis=1)
+
+    aktif = nilai_minggu_ini[nilai_minggu_ini > 0].index
+    value_rank = nilai_minggu_ini.loc[aktif].rank(pct=True)
+
+    insight_rows = []
+    for produk in aktif:
+        nilai = nilai_minggu_ini[produk]
+        rasio = muncul_ratio[produk]
+        base = baseline[produk]
+        is_berulang = rasio >= 0.66
+        is_spike = base > 0 and nilai >= base * 1.5
+
+        score = 0.5 * value_rank[produk] + 0.5 * rasio
+        if score >= 0.75:
+            reduce_pct = 30
+        elif score >= 0.55:
+            reduce_pct = 20
+        elif score >= 0.35 and is_berulang:
+            reduce_pct = 10
+        else:
+            reduce_pct = 0
+
+        if is_berulang:
+            status = "🔁 Berulang"
+        elif base == 0:
+            status = "🆕 Baru"
+        else:
+            status = "Sesekali"
+
+        insight_rows.append(
+            {
+                "Produk": produk,
+                "Status": status,
+                "Muncul": f"{int(round(rasio * n_minggu))}/{n_minggu} minggu",
+                "Nilai Minggu Ini": nilai,
+                "vs Rata² Sebelumnya": f"{(nilai / base * 100 - 100):+.0f}%" if base > 0 else "baru",
+                "Lonjakan": "🔺" if is_spike else "",
+                "Saran": f"Kurangi order {reduce_pct}%" if reduce_pct > 0 else "Monitor saja",
+            }
+        )
+
+    insight_df = pd.DataFrame(insight_rows).sort_values("Nilai Minggu Ini", ascending=False)
+
+    spike_list = insight_df[insight_df["Lonjakan"] == "🔺"]["Produk"].tolist()
+    if spike_list:
+        st.error(
+            "🔺 **Lonjakan tiba-tiba** (naik ≥50% dari rata-rata minggu sebelumnya, cek supplier/kualitas): "
+            + ", ".join(spike_list)
+        )
+
+    reduce_list = insight_df[insight_df["Saran"] != "Monitor saja"]
+    if not reduce_list.empty:
+        st.warning(
+            "✂️ **Kandidat kurangi order** (boros & konsisten berulang): "
+            + ", ".join(f"{r['Produk']} ({r['Saran'].replace('Kurangi order ', '-')})" for _, r in reduce_list.iterrows())
+        )
+
+    st.dataframe(
+        insight_df,
+        hide_index=True,
+        width="stretch",
+        column_config={"Nilai Minggu Ini": st.column_config.NumberColumn(format="Rp %,d")},
+    )
+    st.caption(
+        "Rasio 'Muncul' dihitung dari seluruh minggu yang ada datanya. "
+        "Skor rekomendasi = 50% peringkat nilai rugi minggu ini + 50% seberapa sering berulang -- "
+        "kian tinggi & kian sering, kian besar saran pengurangannya."
+    )
+
+# ======================================================================
+# 5. ESTIMASI DAMPAK KE MARGIN/PROFIT
 # ======================================================================
 st.subheader("💰 Estimasi Dampak ke Margin/Profit")
 
@@ -255,7 +351,7 @@ else:
     st.caption("Belum ada data Laporan Harian sama sekali untuk estimasi omset.")
 
 # ======================================================================
-# 5. TREN HARIAN (semua data yang ada)
+# 6. TREN HARIAN (semua data yang ada)
 # ======================================================================
 st.subheader("📈 Tren Sortir Harian")
 harian = df_f.groupby(df_f["Tanggal"].dt.date)["Subtotal"].sum()
