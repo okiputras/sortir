@@ -1,7 +1,9 @@
 """
-Laporan Sortir -- ringkasan mingguan untuk owner: produk paling boros,
-tren minggu ini vs minggu lalu, perbandingan cabang, dan estimasi
-dampaknya ke margin/profit.
+Laporan Sortir -- ringkasan untuk owner: produk paling boros, tren
+periode ini vs sebelumnya, perbandingan cabang, dan estimasi
+dampaknya ke margin/profit. Bisa dilihat per minggu atau per bulan,
+dan bisa pilih periode mana saja dari histori yang ada (tidak cuma
+yang terbaru).
 
 Dikunci login yang sama dengan Pengeluaran Operasional (session
 "ops_authenticated"), karena isinya data margin/profit yang sensitif.
@@ -54,6 +56,12 @@ def format_rupiah(value) -> str:
     return f"Rp {float(value or 0):,.0f}".replace(",", ".")
 
 
+def format_periode(p: pd.Period, tipe: str) -> str:
+    if tipe == "Bulan":
+        return p.strftime("%B %Y")
+    return f"{p.start_time.date()} – {p.end_time.date()}"
+
+
 def classify_satuan(qtys: pd.Series) -> str:
     """Tebak satuan produk dari pola angka Qty aslinya -- lebih akurat
     daripada nebak dari nama (nama "kg an" di katalog tidak konsisten,
@@ -82,50 +90,66 @@ df["Tanggal"] = pd.to_datetime(df["Tanggal"], errors="coerce")
 df["Subtotal"] = pd.to_numeric(df["Subtotal"], errors="coerce").fillna(0)
 df["Qty"] = pd.to_numeric(df["Qty"], errors="coerce").fillna(0)
 df = df.dropna(subset=["Tanggal"])
-df["minggu"] = df["Tanggal"].dt.to_period("W")
 
-# --- filter cabang ---
-cabang_list = sorted(df["Cabang"].dropna().unique().tolist())
-cabang_selected = st.selectbox("Cabang", ["Semua Cabang"] + cabang_list)
+# --- filter: cabang, tipe periode, & periode spesifik ---
+f1, f2 = st.columns(2)
+with f1:
+    cabang_list = sorted(df["Cabang"].dropna().unique().tolist())
+    cabang_selected = st.selectbox("Cabang", ["Semua Cabang"] + cabang_list)
+with f2:
+    tipe_periode = st.selectbox("Lihat per", ["Minggu", "Bulan"])
+
 df_f = df if cabang_selected == "Semua Cabang" else df[df["Cabang"] == cabang_selected]
 
 if df_f.empty:
     st.warning("Tidak ada data untuk cabang ini.")
     st.stop()
 
-# --- tentukan minggu ini & minggu lalu dari data yang ada ---
-minggu_tersedia = sorted(df_f["minggu"].unique())
-minggu_ini = minggu_tersedia[-1]
-minggu_lalu = minggu_tersedia[-2] if len(minggu_tersedia) >= 2 else None
+freq = "W" if tipe_periode == "Minggu" else "M"
+df_f = df_f.copy()
+df_f["periode"] = df_f["Tanggal"].dt.to_period(freq)
 
-df_minggu_ini = df_f[df_f["minggu"] == minggu_ini]
-total_minggu_ini = df_minggu_ini["Subtotal"].sum()
+periode_tersedia = sorted(df_f["periode"].unique())  # kronologis, terlama -> terbaru
+opsi_periode = list(reversed(periode_tersedia))  # terbaru dulu buat dropdown
+periode_terpilih = st.selectbox(
+    f"Pilih {tipe_periode.lower()}",
+    opsi_periode,
+    format_func=lambda p: format_periode(p, tipe_periode),
+)
+
+idx = periode_tersedia.index(periode_terpilih)
+periode_sebelumnya = periode_tersedia[idx - 1] if idx > 0 else None
+is_periode_terbaru = periode_terpilih == periode_tersedia[-1]
+
+df_periode = df_f[df_f["periode"] == periode_terpilih]
+total_periode = df_periode["Subtotal"].sum()
 
 today = datetime.now(JAKARTA).date()
-minggu_ini_selesai = today > minggu_ini.end_time.date()
-hari_terlewat = (min(today, minggu_ini.end_time.date()) - minggu_ini.start_time.date()).days + 1
+periode_belum_selesai = is_periode_terbaru and today <= periode_terpilih.end_time.date()
 
-st.caption(f"Minggu berjalan: {minggu_ini.start_time.date()} – {minggu_ini.end_time.date()}")
-if not minggu_ini_selesai:
+st.caption(f"Periode dipilih: {format_periode(periode_terpilih, tipe_periode)}")
+if periode_belum_selesai:
+    hari_terlewat = (today - periode_terpilih.start_time.date()).days + 1
+    total_hari = (periode_terpilih.end_time.date() - periode_terpilih.start_time.date()).days + 1
     st.warning(
-        f"⚠️ Minggu ini **belum selesai** (baru hari ke-{hari_terlewat} dari 7) — "
-        "perbandingan \"vs minggu lalu\" di bawah ini belum adil (minggu lalu sudah penuh 7 hari). "
-        "Baru bisa dibandingkan langsung setelah minggu ini selesai."
+        f"⚠️ {tipe_periode} ini **belum selesai** (baru hari ke-{hari_terlewat} dari {total_hari}) — "
+        f"perbandingan \"vs {tipe_periode.lower()} sebelumnya\" di bawah ini belum adil. "
+        f"Baru bisa dibandingkan langsung setelah {tipe_periode.lower()} ini selesai."
     )
 
 # ======================================================================
-# 1. RINGKASAN MINGGU INI VS MINGGU LALU
+# 1. RINGKASAN PERIODE INI VS SEBELUMNYA
 # ======================================================================
-st.subheader("📅 Minggu Ini vs Minggu Lalu")
+st.subheader(f"📅 {tipe_periode} Ini vs {tipe_periode} Sebelumnya")
 
-if minggu_lalu is not None:
-    total_minggu_lalu = df_f[df_f["minggu"] == minggu_lalu]["Subtotal"].sum()
-    delta = total_minggu_ini - total_minggu_lalu
-    delta_pct = (delta / total_minggu_lalu * 100) if total_minggu_lalu > 0 else None
+if periode_sebelumnya is not None:
+    total_sebelumnya = df_f[df_f["periode"] == periode_sebelumnya]["Subtotal"].sum()
+    delta = total_periode - total_sebelumnya
+    delta_pct = (delta / total_sebelumnya * 100) if total_sebelumnya > 0 else None
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Sortir Minggu Ini", format_rupiah(total_minggu_ini))
-    c2.metric("Sortir Minggu Lalu", format_rupiah(total_minggu_lalu))
+    c1.metric(f"Sortir {tipe_periode} Ini", format_rupiah(total_periode))
+    c2.metric(f"Sortir {tipe_periode} Sebelumnya", format_rupiah(total_sebelumnya))
     c3.metric(
         "Perubahan",
         f"{delta_pct:+.1f}%" if delta_pct is not None else "-",
@@ -135,21 +159,21 @@ if minggu_lalu is not None:
 
     if delta_pct is not None:
         if delta_pct <= -10:
-            st.success(f"🎉 Sortir turun {abs(delta_pct):.1f}% dari minggu lalu — usaha reduce-nya kelihatan hasilnya.")
+            st.success(f"🎉 Sortir turun {abs(delta_pct):.1f}% dari {tipe_periode.lower()} sebelumnya — usaha reduce-nya kelihatan hasilnya.")
         elif delta_pct >= 10:
-            st.error(f"⚠️ Sortir naik {delta_pct:.1f}% dari minggu lalu — perlu dicek apa penyebabnya.")
+            st.error(f"⚠️ Sortir naik {delta_pct:.1f}% dari {tipe_periode.lower()} sebelumnya — perlu dicek apa penyebabnya.")
         else:
-            st.info("📊 Sortir relatif stabil dibanding minggu lalu.")
+            st.info(f"📊 Sortir relatif stabil dibanding {tipe_periode.lower()} sebelumnya.")
 else:
-    st.metric("Sortir Minggu Ini", format_rupiah(total_minggu_ini))
-    st.caption("Belum ada data minggu lalu untuk dibandingkan.")
+    st.metric(f"Sortir {tipe_periode} Ini", format_rupiah(total_periode))
+    st.caption(f"Belum ada data {tipe_periode.lower()} sebelumnya untuk dibandingkan.")
 
 # ======================================================================
-# 2. PER CABANG (minggu ini)
+# 2. PER CABANG (periode terpilih)
 # ======================================================================
 if cabang_selected == "Semua Cabang" and len(cabang_list) > 1:
-    st.subheader("🏪 Per Cabang (Minggu Ini)")
-    per_cabang = df_minggu_ini.groupby("Cabang")["Subtotal"].sum().sort_values(ascending=False)
+    st.subheader(f"🏪 Per Cabang ({tipe_periode} Ini)")
+    per_cabang = df_periode.groupby("Cabang")["Subtotal"].sum().sort_values(ascending=False)
     st.bar_chart(per_cabang)
     st.dataframe(
         per_cabang.reset_index().rename(columns={"Subtotal": "Total Sortir"}),
@@ -159,17 +183,16 @@ if cabang_selected == "Semua Cabang" and len(cabang_list) > 1:
     )
 
 # ======================================================================
-# 3. RANKING PRODUK PALING BOROS (minggu ini)
+# 3. RANKING PRODUK PALING BOROS (periode terpilih)
 # ======================================================================
-st.subheader("🔥 Ranking Produk Paling Boros (Minggu Ini)")
+st.subheader(f"🔥 Ranking Produk Paling Boros ({tipe_periode} Ini)")
 
-# Satuan ditebak dari SELURUH riwayat produk itu (bukan cuma minggu ini)
-# biar polanya lebih kelihatan/akurat, walau qty yang ditampilkan tetap
-# qty minggu ini saja.
+# Satuan ditebak dari SELURUH riwayat produk itu (bukan cuma periode
+# terpilih) biar polanya lebih kelihatan/akurat.
 satuan_map = df_f.groupby("Produk")["Qty"].apply(classify_satuan)
 
 ranking = (
-    df_minggu_ini.groupby("Produk")
+    df_periode.groupby("Produk")
     .agg(total_rugi=("Subtotal", "sum"), qty=("Qty", "sum"), kejadian=("Subtotal", "count"))
     .sort_values("total_rugi", ascending=False)
     .reset_index()
@@ -181,7 +204,7 @@ ranking["Qty"] = ranking.apply(
 )
 
 if ranking.empty:
-    st.caption("Belum ada data sortir minggu ini.")
+    st.caption(f"Belum ada data sortir {tipe_periode.lower()} ini.")
 else:
     st.dataframe(
         ranking[["Produk", "Satuan", "Qty", "total_rugi", "kejadian"]].rename(
@@ -197,7 +220,7 @@ else:
     st.warning(
         "👉 **Fokus utama** (nilai rugi terbesar): "
         + ", ".join(top3["Produk"].tolist())
-        + "\n\n👉 **Paling sering muncul** (hampir tiap hari, cek proses order/simpan): "
+        + "\n\n👉 **Paling sering muncul** (cek proses order/simpan): "
         + ", ".join(sering["Produk"].tolist())
     )
 
@@ -206,35 +229,41 @@ else:
 # ======================================================================
 st.subheader("🎯 Insight & Rekomendasi Aksi")
 
-pivot = df_f.groupby(["Produk", "minggu"])["Subtotal"].sum().unstack(fill_value=0)
-pivot = pivot.reindex(columns=minggu_tersedia, fill_value=0)
-n_minggu = len(minggu_tersedia)
+pivot = df_f.groupby(["Produk", "periode"])["Subtotal"].sum().unstack(fill_value=0)
+pivot = pivot.reindex(columns=periode_tersedia, fill_value=0)
+n_periode = len(periode_tersedia)
 
-if n_minggu < 2:
+if n_periode < 2:
     st.caption(
-        "Butuh minimal 2 minggu data untuk insight berulang/lonjakan/rekomendasi kurangi order. "
-        "Baru ada 1 minggu data."
+        f"Butuh minimal 2 {tipe_periode.lower()} data untuk insight berulang/lonjakan/rekomendasi kurangi order. "
+        f"Baru ada 1 {tipe_periode.lower()} data."
     )
 else:
-    if n_minggu < 4:
+    if n_periode < 4:
         st.caption(
-            f"ℹ️ Baru ada {n_minggu} minggu data, jadi status \"Berulang\" & saran di bawah ini masih "
-            "**awal/kasar** -- gampang sekali produk kelihatan \"berulang\" padahal cuma kebetulan muncul "
-            "di kedua-duanya. Makin akurat & bisa dipercaya setelah 4+ minggu data terkumpul. "
+            f"ℹ️ Baru ada {n_periode} {tipe_periode.lower()} data, jadi status \"Berulang\" & saran di bawah ini "
+            "masih **awal/kasar** -- gampang sekali produk kelihatan \"berulang\" padahal cuma kebetulan. "
+            f"Makin akurat & bisa dipercaya setelah 4+ {tipe_periode.lower()} data terkumpul. "
             "Untuk sekarang, pakai sebagai starting point, bukan keputusan final."
         )
 
-    muncul_ratio = (pivot > 0).sum(axis=1) / n_minggu
-    nilai_minggu_ini = pivot[minggu_ini]
-    minggu_sebelum = [m for m in minggu_tersedia if m != minggu_ini]
-    baseline = pivot[minggu_sebelum].mean(axis=1)
+    # rasio & baseline dihitung relatif terhadap periode_terpilih (bukan
+    # selalu periode terbaru), biar tetap benar walau lihat histori lama.
+    periode_up_to_now = [p for p in periode_tersedia if p <= periode_terpilih]
+    pivot_relevan = pivot[periode_up_to_now]
+    n_relevan = len(periode_up_to_now)
 
-    aktif = nilai_minggu_ini[nilai_minggu_ini > 0].index
-    value_rank = nilai_minggu_ini.loc[aktif].rank(pct=True)
+    muncul_ratio = (pivot_relevan > 0).sum(axis=1) / n_relevan
+    nilai_periode = pivot[periode_terpilih]
+    periode_sebelum_list = [p for p in periode_up_to_now if p != periode_terpilih]
+    baseline = pivot[periode_sebelum_list].mean(axis=1) if periode_sebelum_list else pd.Series(0, index=pivot.index)
+
+    aktif = nilai_periode[nilai_periode > 0].index
+    value_rank = nilai_periode.loc[aktif].rank(pct=True)
 
     insight_rows = []
     for produk in aktif:
-        nilai = nilai_minggu_ini[produk]
+        nilai = nilai_periode[produk]
         rasio = muncul_ratio[produk]
         base = baseline[produk]
         is_berulang = rasio >= 0.66
@@ -261,20 +290,20 @@ else:
             {
                 "Produk": produk,
                 "Status": status,
-                "Muncul": f"{int(round(rasio * n_minggu))}/{n_minggu} minggu",
-                "Nilai Minggu Ini": nilai,
+                "Muncul": f"{int(round(rasio * n_relevan))}/{n_relevan} {tipe_periode.lower()}",
+                f"Nilai {tipe_periode} Ini": nilai,
                 "vs Rata² Sebelumnya": f"{(nilai / base * 100 - 100):+.0f}%" if base > 0 else "baru",
                 "Lonjakan": "🔺" if is_spike else "",
                 "Saran": f"Kurangi order {reduce_pct}%" if reduce_pct > 0 else "Monitor saja",
             }
         )
 
-    insight_df = pd.DataFrame(insight_rows).sort_values("Nilai Minggu Ini", ascending=False)
+    insight_df = pd.DataFrame(insight_rows).sort_values(f"Nilai {tipe_periode} Ini", ascending=False)
 
     spike_list = insight_df[insight_df["Lonjakan"] == "🔺"]["Produk"].tolist()
     if spike_list:
         st.error(
-            "🔺 **Lonjakan tiba-tiba** (naik ≥50% dari rata-rata minggu sebelumnya, cek supplier/kualitas): "
+            f"🔺 **Lonjakan tiba-tiba** (naik ≥50% dari rata-rata {tipe_periode.lower()} sebelumnya, cek supplier/kualitas): "
             + ", ".join(spike_list)
         )
 
@@ -289,11 +318,11 @@ else:
         insight_df,
         hide_index=True,
         width="stretch",
-        column_config={"Nilai Minggu Ini": st.column_config.NumberColumn(format="Rp %,d")},
+        column_config={f"Nilai {tipe_periode} Ini": st.column_config.NumberColumn(format="Rp %,d")},
     )
     st.caption(
-        "Rasio 'Muncul' dihitung dari seluruh minggu yang ada datanya. "
-        "Skor rekomendasi = 50% peringkat nilai rugi minggu ini + 50% seberapa sering berulang -- "
+        "Rasio 'Muncul' dihitung dari seluruh periode sampai dengan periode yang dipilih. "
+        "Skor rekomendasi = 50% peringkat nilai rugi + 50% seberapa sering berulang -- "
         "kian tinggi & kian sering, kian besar saran pengurangannya."
     )
 
@@ -316,37 +345,37 @@ if laporan_records:
     lap_df["Tanggal"] = pd.to_datetime(lap_df["Tanggal"], errors="coerce")
     for c in ["Cash", "Qris", "Debit", "Tf"]:
         lap_df[c] = pd.to_numeric(lap_df[c], errors="coerce").fillna(0)
-    lap_df["minggu"] = lap_df["Tanggal"].dt.to_period("W")
+    lap_df["periode"] = lap_df["Tanggal"].dt.to_period(freq)
     lap_df_f = lap_df if cabang_selected == "Semua Cabang" else lap_df[lap_df["Cabang"] == cabang_selected]
     # dedupe per sesi biar Cash/Qris/dst tidak ke-double-count (berulang di tiap baris item)
     sesi_unik = lap_df_f.drop_duplicates(subset="Session ID")
-    sesi_minggu_ini = sesi_unik[sesi_unik["minggu"] == minggu_ini]
-    omset_proxy = (sesi_minggu_ini["Cash"] + sesi_minggu_ini["Qris"] + sesi_minggu_ini["Debit"] + sesi_minggu_ini["Tf"]).sum()
+    sesi_periode = sesi_unik[sesi_unik["periode"] == periode_terpilih]
+    omset_proxy = (sesi_periode["Cash"] + sesi_periode["Qris"] + sesi_periode["Debit"] + sesi_periode["Tf"]).sum()
 
     if omset_proxy > 0:
         margin_kotor = omset_proxy * margin_pct / 100
-        margin_bersih = margin_kotor - total_minggu_ini
-        pct_tergerus = (total_minggu_ini / margin_kotor * 100) if margin_kotor > 0 else None
+        margin_bersih = margin_kotor - total_periode
+        pct_tergerus = (total_periode / margin_kotor * 100) if margin_kotor > 0 else None
 
         c1, c2, c3 = st.columns(3)
-        c1.metric("Omset Minggu Ini (estimasi)", format_rupiah(omset_proxy))
+        c1.metric(f"Omset {tipe_periode} Ini (estimasi)", format_rupiah(omset_proxy))
         c2.metric("Margin Kotor (estimasi)", format_rupiah(margin_kotor))
         c3.metric(
             "Margin Tergerus Sortir",
             f"{pct_tergerus:.1f}%" if pct_tergerus is not None else "-",
-            delta=f"-{format_rupiah(total_minggu_ini)}",
+            delta=f"-{format_rupiah(total_periode)}",
         )
         st.caption(
             "Omset di sini estimasi kasar dari Cash+Qris+Debit+Tf yang tercatat di Laporan Harian, "
             "bisa kurang akurat kalau ada sesi yang belum lengkap diisi."
         )
         st.success(
-            f"Dari margin kotor ~{format_rupiah(margin_kotor)} minggu ini, "
-            f"**{format_rupiah(total_minggu_ini)} ({pct_tergerus:.1f}%) hilang karena sortir** — "
+            f"Dari margin kotor ~{format_rupiah(margin_kotor)} {tipe_periode.lower()} ini, "
+            f"**{format_rupiah(total_periode)} ({pct_tergerus:.1f}%) hilang karena sortir** — "
             f"margin bersih sebenarnya ~{format_rupiah(margin_bersih)}."
         )
     else:
-        st.caption("Belum cukup data Laporan Harian minggu ini untuk estimasi omset.")
+        st.caption(f"Belum cukup data Laporan Harian {tipe_periode.lower()} ini untuk estimasi omset.")
 else:
     st.caption("Belum ada data Laporan Harian sama sekali untuk estimasi omset.")
 
