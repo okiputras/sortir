@@ -26,6 +26,7 @@ pg = st.navigation(
             icon="🔒",
         ),
         st.Page("views/laporan_sortir.py", title="Laporan Sortir", icon="📉"),
+        st.Page("views/laporan_operasional.py", title="Laporan Operasional", icon="📊"),
     ]
 )
 pg.run()
