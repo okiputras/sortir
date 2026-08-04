@@ -54,6 +54,16 @@ def format_rupiah(value) -> str:
     return f"Rp {float(value or 0):,.0f}".replace(",", ".")
 
 
+def classify_satuan(qtys: pd.Series) -> str:
+    """Tebak satuan produk dari pola angka Qty aslinya -- lebih akurat
+    daripada nebak dari nama (nama "kg an" di katalog tidak konsisten,
+    ada produk kg beneran yang namanya tidak nyebut "kg" sama sekali,
+    mis. "BENGKOANG", "jeruk nipis"). Kalau pernah tercatat pecahan,
+    berarti ditimbang (Kg); kalau selalu bilangan bulat, berarti
+    dihitung per ikat/pcs."""
+    return "Kg" if any(abs(q - round(q)) > 1e-9 for q in qtys if pd.notna(q)) else "Ikat/Pcs"
+
+
 # --- load data ---
 try:
     with st.spinner("Memuat data..."):
@@ -153,20 +163,30 @@ if cabang_selected == "Semua Cabang" and len(cabang_list) > 1:
 # ======================================================================
 st.subheader("🔥 Ranking Produk Paling Boros (Minggu Ini)")
 
+# Satuan ditebak dari SELURUH riwayat produk itu (bukan cuma minggu ini)
+# biar polanya lebih kelihatan/akurat, walau qty yang ditampilkan tetap
+# qty minggu ini saja.
+satuan_map = df_f.groupby("Produk")["Qty"].apply(classify_satuan)
+
 ranking = (
     df_minggu_ini.groupby("Produk")
     .agg(total_rugi=("Subtotal", "sum"), qty=("Qty", "sum"), kejadian=("Subtotal", "count"))
     .sort_values("total_rugi", ascending=False)
     .reset_index()
 )
+ranking["Satuan"] = ranking["Produk"].map(satuan_map)
+ranking["Qty"] = ranking.apply(
+    lambda r: f"{r['qty']:.2f} kg" if r["Satuan"] == "Kg" else f"{r['qty']:.0f} ikat/pcs",
+    axis=1,
+)
 
 if ranking.empty:
     st.caption("Belum ada data sortir minggu ini.")
 else:
     st.dataframe(
-        ranking.head(15).rename(
-            columns={"Produk": "Produk", "total_rugi": "Total Rugi", "qty": "Qty", "kejadian": "Jumlah Kejadian"}
-        ),
+        ranking[["Produk", "Satuan", "Qty", "total_rugi", "kejadian"]].rename(
+            columns={"total_rugi": "Total Rugi", "kejadian": "Jumlah Kejadian"}
+        ).head(15),
         hide_index=True,
         width="stretch",
         column_config={"Total Rugi": st.column_config.NumberColumn(format="Rp %,d")},
