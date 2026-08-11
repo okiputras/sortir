@@ -16,6 +16,7 @@ import pandas as pd
 import streamlit as st
 
 from gsheet_client import load_laporan, load_sortir
+from sales_upload import normalize_name, parse_transaksi
 
 JAKARTA = ZoneInfo("Asia/Jakarta")
 
@@ -70,6 +71,12 @@ def classify_satuan(qtys: pd.Series) -> str:
     berarti ditimbang (Kg); kalau selalu bilangan bulat, berarti
     dihitung per ikat/pcs."""
     return "Kg" if any(abs(q - round(q)) > 1e-9 for q in qtys if pd.notna(q)) else "Ikat/Pcs"
+
+
+@st.cache_data(show_spinner=False)
+def parse_transaksi_cached(file_bytes: bytes) -> pd.DataFrame:
+    """Cache hasil parse per isi file, biar tidak baca ulang tiap rerun."""
+    return parse_transaksi(file_bytes)
 
 
 # --- load data ---
@@ -136,6 +143,76 @@ if periode_belum_selesai:
         f"perbandingan \"vs {tipe_periode.lower()} sebelumnya\" di bawah ini belum adil. "
         f"Baru bisa dibandingkan langsung setelah {tipe_periode.lower()} ini selesai."
     )
+
+# ======================================================================
+# UPLOAD DATA PENJUALAN (opsional) -- buka rasio sortir & margin nyata
+# ======================================================================
+# File Kasir Pintar dikeluarkan per cabang & tidak punya kolom cabang,
+# jadi perbandingan cuma valid kalau satu cabang spesifik lagi dipilih.
+st.subheader("📤 Data Penjualan (opsional)")
+
+sales_df = None
+sales_ov = pd.DataFrame()   # transaksi pada irisan tanggal
+sortir_ov = pd.DataFrame()  # sortir pada irisan tanggal yang sama
+ov_start = ov_end = None
+
+bisa_upload = not (cabang_selected == "Semua Cabang" and len(cabang_list) > 1)
+if not bisa_upload:
+    st.caption(
+        "Untuk membandingkan sortir dengan penjualan, pilih **satu cabang** dulu "
+        "di filter atas (file transaksi Kasir Pintar dikeluarkan per cabang)."
+    )
+else:
+    up = st.file_uploader(
+        f"Upload export transaksi Kasir Pintar (.xls) untuk **{cabang_selected}**",
+        type=["xls"],
+        help=(
+            "File 'Laporan' Kasir Pintar yang berisi sheet 'TransaksiBarang'. "
+            "Ekspor rentang tanggal yang mencakup periode di atas biar perbandingannya penuh."
+        ),
+    )
+    if up is not None:
+        try:
+            sales_df = parse_transaksi_cached(up.getvalue())
+        except ValueError as e:
+            st.error(str(e))
+            sales_df = None
+
+if sales_df is not None:
+    per_start = periode_terpilih.start_time.date()
+    per_end = periode_terpilih.end_time.date()
+    file_start = sales_df["Timestamp"].min().date()
+    file_end = sales_df["Timestamp"].max().date()
+    ov_start = max(per_start, file_start)
+    ov_end = min(per_end, file_end)
+
+    if ov_start > ov_end:
+        st.warning(
+            f"File transaksi mencakup {file_start} – {file_end}, sedangkan "
+            f"{tipe_periode.lower()} yang dipilih {per_start} – {per_end}. "
+            "Tidak ada tanggal yang beririsan, jadi belum bisa dibandingkan — "
+            "pilih periode lain atau ekspor file untuk rentang yang sesuai."
+        )
+        sales_df = None
+    else:
+        sd = sales_df["Timestamp"].dt.date
+        sales_ov = sales_df[(sd >= ov_start) & (sd <= ov_end)].copy()
+        sales_ov["laba"] = (sales_ov["HargaJual"] - sales_ov["HargaBeli"]) * sales_ov["Jumlah"]
+        so = df_periode["Tanggal"].dt.date
+        sortir_ov = df_periode[(so >= ov_start) & (so <= ov_end)].copy()
+        sortir_ov["nama_norm"] = sortir_ov["Produk"].map(normalize_name)
+
+        st.success(
+            f"✅ Data penjualan termuat ({file_start} – {file_end}). "
+            f"Perbandingan dihitung pada irisan tanggal **{ov_start} – {ov_end}**."
+        )
+        if not (ov_start == per_start and ov_end == per_end):
+            st.warning(
+                f"⚠️ File hanya menutupi sebagian {tipe_periode.lower()} ini "
+                f"({ov_start} – {ov_end} dari {per_start} – {per_end}). Angka sortir di "
+                "bagian perbandingan & margin-nyata ikut dipotong ke rentang itu biar "
+                "adil, jadi bisa lebih kecil dari total sortir seluruh periode."
+            )
 
 # ======================================================================
 # 1. RINGKASAN PERIODE INI VS SEBELUMNYA
@@ -223,6 +300,97 @@ else:
         + "\n\n👉 **Paling sering muncul** (cek proses order/simpan): "
         + ", ".join(sering["Produk"].tolist())
     )
+
+# ======================================================================
+# 3.5 SORTIR VS PENJUALAN (butuh upload data transaksi)
+# ======================================================================
+if sales_df is not None and not sortir_ov.empty:
+    st.subheader("🧮 Sortir vs Penjualan")
+
+    jual = (
+        sales_ov.groupby("nama_norm")
+        .agg(qty_jual=("Jumlah", "sum"), omset=("Total", "sum"), untung_jual=("laba", "sum"))
+        .reset_index()
+    )
+    srt = (
+        sortir_ov.groupby(["Produk", "nama_norm"])
+        .agg(qty_sortir=("Qty", "sum"), rugi_sortir=("Subtotal", "sum"))
+        .reset_index()
+    )
+    m = srt.merge(jual, on="nama_norm", how="left")
+    m["cocok"] = m["qty_jual"].notna()
+    m["qty_jual"] = m["qty_jual"].fillna(0)
+    m["omset"] = m["omset"].fillna(0)
+    m["untung_jual"] = m["untung_jual"].fillna(0)
+    m["rasio"] = m.apply(lambda r: (r["qty_sortir"] / r["qty_jual"]) if r["qty_jual"] > 0 else None, axis=1)
+    # Net cuma bermakna untuk produk yang ketemu di data penjualan; kalau tidak
+    # cocok, untung_jual=0 itu artifak (bukan beneran nol untung) -> biarkan kosong.
+    m["net"] = (m["untung_jual"] - m["rugi_sortir"]).where(m["cocok"])
+    m["Satuan"] = m["Produk"].map(satuan_map)
+
+    # headline
+    total_omset = jual["omset"].sum()
+    total_untung = jual["untung_jual"].sum()
+    total_rugi = sortir_ov["Subtotal"].sum()
+    pct_untung_tergerus = (total_rugi / total_untung * 100) if total_untung > 0 else None
+    h1, h2, h3 = st.columns(3)
+    h1.metric("Omset (irisan)", format_rupiah(total_omset))
+    h2.metric("Rugi Sortir (irisan)", format_rupiah(total_rugi))
+    h3.metric(
+        "Untung Tergerus Sortir",
+        f"{pct_untung_tergerus:.1f}%" if pct_untung_tergerus is not None else "-",
+        delta=f"-{format_rupiah(total_rugi)}",
+    )
+
+    def _fmt_qty(q, sat):
+        return f"{q:.2f} kg" if sat == "Kg" else f"{q:.0f} ikat/pcs"
+
+    tampil = m.sort_values(["cocok", "rasio"], ascending=[False, False]).copy()
+    tampil["Terjual"] = tampil.apply(
+        lambda r: _fmt_qty(r["qty_jual"], r["Satuan"]) if r["cocok"] else "—", axis=1
+    )
+    tampil["Sortir"] = tampil.apply(lambda r: _fmt_qty(r["qty_sortir"], r["Satuan"]), axis=1)
+    tampil["Rasio Sortir"] = tampil["rasio"].apply(
+        lambda x: f"{x * 100:.0f}%" if pd.notna(x) else "—"
+    )
+
+    st.dataframe(
+        tampil[["Produk", "Terjual", "Sortir", "Rasio Sortir", "rugi_sortir", "untung_jual", "net"]]
+        .rename(columns={"rugi_sortir": "Rugi Sortir", "untung_jual": "Untung Jual", "net": "Net (Untung-Rugi)"})
+        .head(30),
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "Rugi Sortir": st.column_config.NumberColumn(format="Rp %,d"),
+            "Untung Jual": st.column_config.NumberColumn(format="Rp %,d"),
+            "Net (Untung-Rugi)": st.column_config.NumberColumn(format="Rp %,d"),
+        },
+    )
+    st.caption(
+        "**Rasio Sortir** = qty disortir ÷ qty terjual pada rentang yang sama — makin tinggi makin boros "
+        "relatif ke penjualannya (mis. 19% = dari tiap 100 terjual, ~19 kebuang). "
+        "**Net** negatif = rugi sortir produk itu melebihi untung jualannya."
+    )
+
+    boros = m[(m["rasio"].notna()) & (m["rasio"] >= 0.15)].sort_values("rasio", ascending=False)
+    if not boros.empty:
+        st.warning(
+            "🔻 **Rasio sortir tinggi (≥15%)** — prioritas cek kualitas/penyimpanan/order: "
+            + ", ".join(f"{r['Produk']} ({r['rasio'] * 100:.0f}%)" for _, r in boros.head(8).iterrows())
+        )
+    net_rugi = m[m["net"] < 0].sort_values("net")
+    if not net_rugi.empty:
+        st.error(
+            "🚨 **Sortir > untung jual** (produk ini makan untung di rentang ini): "
+            + ", ".join(net_rugi.head(8)["Produk"].tolist())
+        )
+    tak_cocok = m[~m["cocok"]]["Produk"].tolist()
+    if tak_cocok:
+        st.caption(
+            "ℹ️ Tidak ketemu di data penjualan (kemungkinan beda ejaan nama, atau memang "
+            "tidak terjual di rentang ini): " + ", ".join(tak_cocok[:15])
+            + (" …" if len(tak_cocok) > 15 else "")
+        )
 
 # ======================================================================
 # 4. INSIGHT & REKOMENDASI AKSI
@@ -330,6 +498,31 @@ else:
 # 5. ESTIMASI DAMPAK KE MARGIN/PROFIT
 # ======================================================================
 st.subheader("💰 Estimasi Dampak ke Margin/Profit")
+
+if sales_df is not None and not sales_ov.empty:
+    untung_kotor_nyata = sales_ov["laba"].sum()
+    rugi_sortir_nyata = sortir_ov["Subtotal"].sum()
+    untung_bersih_nyata = untung_kotor_nyata - rugi_sortir_nyata
+    pct_nyata = (rugi_sortir_nyata / untung_kotor_nyata * 100) if untung_kotor_nyata > 0 else None
+
+    st.markdown("**📌 Berdasarkan data penjualan yang diupload (paling akurat):**")
+    n1, n2, n3 = st.columns(3)
+    n1.metric(f"Untung Kotor ({ov_start} – {ov_end})", format_rupiah(untung_kotor_nyata))
+    n2.metric("Rugi Sortir (rentang sama)", format_rupiah(rugi_sortir_nyata))
+    n3.metric(
+        "Untung Tergerus Sortir",
+        f"{pct_nyata:.1f}%" if pct_nyata is not None else "-",
+        delta=f"-{format_rupiah(rugi_sortir_nyata)}",
+    )
+    if pct_nyata is not None:
+        st.success(
+            f"Dari untung kotor riil ~{format_rupiah(untung_kotor_nyata)}, "
+            f"**{format_rupiah(rugi_sortir_nyata)} ({pct_nyata:.1f}%) hilang karena sortir** — "
+            f"untung bersih ~{format_rupiah(untung_bersih_nyata)}. "
+            "(Untung kotor = (harga jual − harga beli) × qty terjual, langsung dari transaksi.)"
+        )
+    st.divider()
+    st.caption("Angka di bawah ini estimasi kasar (dipakai kalau tidak upload) — abaikan kalau sudah pakai angka nyata di atas.")
 
 margin_pct = st.number_input(
     "Asumsi margin kotor (%)",

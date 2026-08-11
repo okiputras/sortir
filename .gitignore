@@ -5,3 +5,4 @@ __pycache__/
 service_account.json
 .streamlit/secrets.toml
 spreadsheet_id.txt
+*.xls
