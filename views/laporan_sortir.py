@@ -73,7 +73,10 @@ def classify_satuan(qtys: pd.Series) -> str:
     return "Kg" if any(abs(q - round(q)) > 1e-9 for q in qtys if pd.notna(q)) else "Ikat/Pcs"
 
 
-@st.cache_data(show_spinner=False)
+# max_entries kecil + ttl: server Railway cuma 512 MB RAM, jadi hasil parse
+# (DataFrame bisa puluhan-ratusan MB untuk file besar) tidak boleh menumpuk
+# di cache. Simpan maksimal 2 file terakhir, auto-buang setelah 30 menit.
+@st.cache_data(show_spinner=False, max_entries=2, ttl=1800)
 def parse_transaksi_cached(file_bytes: bytes) -> pd.DataFrame:
     """Cache hasil parse per isi file, biar tidak baca ulang tiap rerun."""
     return parse_transaksi(file_bytes)
@@ -172,11 +175,23 @@ else:
         ),
     )
     if up is not None:
-        try:
-            sales_df = parse_transaksi_cached(up.getvalue())
-        except ValueError as e:
-            st.error(str(e))
+        # Server Railway 512 MB RAM: parsing .xls BIFF boros memori (bisa
+        # ~10x ukuran file), jadi tolak file kegedean sebelum diproses biar
+        # tidak OOM/restart. ~20 MB masih aman & cukup untuk data 1 bulan.
+        size_mb = up.size / (1024 * 1024)
+        if size_mb > 20:
+            st.error(
+                f"File {size_mb:.0f} MB terlalu besar untuk server ini. "
+                "Ekspor rentang tanggal yang lebih pendek dari Kasir Pintar "
+                "(mis. per bulan) supaya file di bawah ~20 MB."
+            )
             sales_df = None
+        else:
+            try:
+                sales_df = parse_transaksi_cached(up.getvalue())
+            except ValueError as e:
+                st.error(str(e))
+                sales_df = None
 
 if sales_df is not None:
     per_start = periode_terpilih.start_time.date()
