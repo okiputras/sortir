@@ -6,14 +6,19 @@ Koneksi ke Google Sheets & fungsi CRUD untuk sheet "Sortir" dan
 import json
 import os
 import random
+import re
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
 from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+
+JAKARTA = ZoneInfo("Asia/Jakarta")
 
 LOCK_SHEET = "_Lock"
 LOCK_TIMEOUT_SECONDS = 15
@@ -131,6 +136,49 @@ def get_spreadsheet():
         ) from e
 
 
+def _monthly_sheet_name(base_name: str, dt: datetime) -> str:
+    return f"{base_name}_{dt.month:02d}_{dt.year}"
+
+
+def _monthly_sheet_pattern(base_name: str) -> re.Pattern:
+    return re.compile(rf"^{re.escape(base_name)}_(\d{{2}})_(\d{{4}})$")
+
+
+def _data_sheets(base_name: str) -> list:
+    """Semua worksheet yang jadi sumber data untuk base_name ini: sheet
+    lama (nama polos, isinya data sebelum fitur pemisahan-per-bulan ada)
+    kalau masih ada, lalu semua sheet bulanan "Base_MM_YYYY", diurutkan
+    kronologis lama -> baru. Dipakai supaya laporan tetap bisa melihat
+    seluruh histori walau datanya sekarang tersebar per bulan."""
+    sh = get_spreadsheet()
+    pattern = _monthly_sheet_pattern(base_name)
+    legacy = None
+    monthly = []
+    for ws in sh.worksheets():
+        if ws.title == base_name:
+            legacy = ws
+        else:
+            m = pattern.match(ws.title)
+            if m:
+                monthly.append((int(m.group(2)), int(m.group(1)), ws))
+    monthly.sort(key=lambda t: (t[0], t[1]))
+    return ([legacy] if legacy else []) + [ws for _, _, ws in monthly]
+
+
+def _ensure_monthly_sheet(base_name: str, header: list[str], dt: datetime):
+    """Sheet tujuan insert untuk bulan `dt` (mis. "Sortir_09_2026"),
+    dibuat otomatis dengan header kalau bulan ini baru pertama kali ada
+    transaksi -- tujuannya biar data tiap bulan terpisah rapi."""
+    sh = get_spreadsheet()
+    title = _monthly_sheet_name(base_name, dt)
+    titles = {ws.title for ws in sh.worksheets()}
+    if title in titles:
+        return sh.worksheet(title)
+    ws = sh.add_worksheet(title=title, rows=1000, cols=max(len(header), 1))
+    ws.update([header], "A1")
+    return ws
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def load_produk():
     ws = get_spreadsheet().worksheet("Produk")
@@ -149,25 +197,29 @@ def load_karyawan():
     return ws.get_all_records()
 
 
-@st.cache_data(ttl=30, show_spinner=False)
-def load_sortir():
-    ws = get_spreadsheet().worksheet("Sortir")
+def _load_all_records(base_name: str) -> list[dict]:
     # Baris yang di-soft-delete (lihat _delete_session_rows) isinya
     # dikosongkan, bukan dihapus fisik -- filter di sini biar tidak
     # nongol sebagai baris kosong di UI.
-    return [r for r in ws.get_all_records() if r.get("Session ID")]
+    records = []
+    for ws in _data_sheets(base_name):
+        records.extend(r for r in ws.get_all_records() if r.get("Session ID"))
+    return records
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_sortir():
+    return _load_all_records("Sortir")
 
 
 @st.cache_data(ttl=30, show_spinner=False)
 def load_laporan():
-    ws = get_spreadsheet().worksheet("Laporan Harian")
-    return [r for r in ws.get_all_records() if r.get("Session ID")]
+    return _load_all_records("Laporan Harian")
 
 
 @st.cache_data(ttl=30, show_spinner=False)
 def load_operasional():
-    ws = get_spreadsheet().worksheet("Pengeluaran Operasional")
-    return [r for r in ws.get_all_records() if r.get("Session ID")]
+    return _load_all_records("Pengeluaran Operasional")
 
 
 def _parallel_load(jobs: dict) -> dict:
@@ -265,22 +317,30 @@ def _release_lock(token: str) -> None:
         ws.update([["", ""]], "A2")
 
 
-def _append_rows(sheet_name: str, header: list[str], rows: list[dict]) -> None:
-    ws = get_spreadsheet().worksheet(sheet_name)
+def _append_rows(base_name: str, header: list[str], rows: list[dict]) -> None:
+    # Tujuan insert selalu sheet bulan berjalan (mis. "Sortir_09_2026"),
+    # dibuat otomatis kalau bulan ini baru pertama kali ada transaksi --
+    # jadi data tiap bulan otomatis terpisah, tidak menumpuk di satu sheet.
+    ws = _ensure_monthly_sheet(base_name, header, datetime.now(JAKARTA))
     values = [[row.get(col, "") for col in header] for row in rows]
     ws.append_rows(values, value_input_option="USER_ENTERED")
 
 
-def _delete_session_rows(sheet_name: str, session_id: str) -> None:
+def _delete_session_rows(base_name: str, session_id: str) -> None:
     """Hapus baris fisik (deleteDimension) -- sheet tetap bersih, tidak
     menumpuk baris kosong. Dilindungi lock (_acquire_lock/_release_lock)
     supaya tidak overlap dengan delete/edit user lain yang jalan
-    bersamaan, karena hapus fisik menggeser index baris di bawahnya."""
+    bersamaan, karena hapus fisik menggeser index baris di bawahnya.
+
+    Sesi bisa ada di sheet bulan mana saja (data terpisah per bulan),
+    jadi dicari di semua sheet punya base_name ini -- begitu ketemu,
+    langsung berhenti (satu sesi cuma pernah ditulis ke satu sheet)."""
     token = _acquire_lock()
     try:
-        ws = get_spreadsheet().worksheet(sheet_name)
-        matches = ws.findall(session_id, in_column=1)
-        if matches:
+        for ws in _data_sheets(base_name):
+            matches = ws.findall(session_id, in_column=1)
+            if not matches:
+                continue
             rows = sorted({c.row for c in matches}, reverse=True)
             requests = [
                 {
@@ -296,6 +356,7 @@ def _delete_session_rows(sheet_name: str, session_id: str) -> None:
                 for r in rows
             ]
             get_spreadsheet().batch_update({"requests": requests})
+            break
     finally:
         _release_lock(token)
 
