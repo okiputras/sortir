@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
+from gspread.utils import fill_gaps, numericise_all, to_records
 from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
 
 JAKARTA = ZoneInfo("Asia/Jakarta")
@@ -197,14 +198,43 @@ def load_karyawan():
     return ws.get_all_records()
 
 
+def _batch_get_records(worksheets: list) -> list[dict]:
+    """Ambil isi banyak worksheet sekaligus lewat 1 request HTTP
+    (spreadsheets.values.batchGet), bukan 1 request per sheet lewat
+    ws.get_all_records() satu-satu. Jumlah request jadi tetap 1 walau
+    sheet bulanannya terus nambah tiap bulan.
+
+    Logikanya sengaja disamakan persis dengan gspread's Worksheet.get_all_records()
+    (fill_gaps buat baris yang lebih pendek dari header, numericise_all
+    buat konversi angka, to_records buat pasangkan header->value) supaya
+    hasilnya identik, cuma jalur pengambilan datanya yang beda.
+    """
+    if not worksheets:
+        return []
+    sh = get_spreadsheet()
+    quote = "'"
+    escaped_titles = [ws.title.replace(quote, quote + quote) for ws in worksheets]
+    ranges = [f"{quote}{title}{quote}" for title in escaped_titles]
+    response = sh.values_batch_get(ranges)
+
+    records = []
+    for value_range in response.get("valueRanges", []):
+        raw_values = value_range.get("values", [])
+        if not raw_values:
+            continue
+        values = fill_gaps(raw_values)
+        keys = values[0]
+        rows = [numericise_all(row) for row in values[1:]]
+        records.extend(to_records(keys, rows))
+    return records
+
+
 def _load_all_records(base_name: str) -> list[dict]:
     # Baris yang di-soft-delete (lihat _delete_session_rows) isinya
     # dikosongkan, bukan dihapus fisik -- filter di sini biar tidak
     # nongol sebagai baris kosong di UI.
-    records = []
-    for ws in _data_sheets(base_name):
-        records.extend(r for r in ws.get_all_records() if r.get("Session ID"))
-    return records
+    records = _batch_get_records(_data_sheets(base_name))
+    return [r for r in records if r.get("Session ID")]
 
 
 @st.cache_data(ttl=30, show_spinner=False)
