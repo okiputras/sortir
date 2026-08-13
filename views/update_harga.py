@@ -3,6 +3,9 @@ Update Harga (Olshopin) -- tarik harga jual terbaru dari katalog Olshopin,
 hitung harga beli (kg -4.000 / satuan -500), tampilkan preview, lalu tulis ke
 tab Produk (kolom harga_jual_edit & harga_beli_edit).
 
+Juga berisi Proyeksi Stok Habis (stok real-time Olshopin vs rata-rata
+penjualan harian) & Upload Data Penjualan (sumber data histori penjualan).
+
 Produk yang belum cocok otomatis dibiarkan; pemetaan manual dibaca dari tab
 ProdukMapping (nama_barang_edit | nama_olshopin).
 
@@ -60,56 +63,57 @@ if c2.button("🧹 Bersihkan cache"):
     st.info("Cache katalog dibersihkan. Klik 'Tarik katalog' untuk ambil ulang.")
 
 catalog = st.session_state.get("olshop_catalog")
+matched = []  # dipakai lagi di section Proyeksi Stok di bawah
+
 if not catalog:
-    st.info("Klik **Tarik katalog Olshopin** untuk mulai.")
-    st.stop()
+    st.info("Klik **Tarik katalog Olshopin** untuk mulai perbandingan harga & lihat stok real-time.")
+else:
+    st.success(f"Katalog termuat: {len(catalog):,} produk.".replace(",", "."))
 
-st.success(f"Katalog termuat: {len(catalog):,} produk.".replace(",", "."))
+    sh = get_spreadsheet()
+    ws = sh.worksheet("Produk")
+    rows = ws.get_all_values()[1:]
+    plan = S.plan_updates(rows, catalog)
+    matched = [p for p in plan if p["matched"]]
+    unmatched = [p for p in plan if not p["matched"]]
+    overridden = sum(1 for p in plan if p.get("override"))
 
-sh = get_spreadsheet()
-ws = sh.worksheet("Produk")
-rows = ws.get_all_values()[1:]
-plan = S.plan_updates(rows, catalog)
-matched = [p for p in plan if p["matched"]]
-unmatched = [p for p in plan if not p["matched"]]
-overridden = sum(1 for p in plan if p.get("override"))
-
-m1, m2, m3 = st.columns(3)
-m1.metric("Total produk", len(plan))
-m2.metric("Cocok (akan diupdate)", len(matched))
-m3.metric("Belum cocok", len(unmatched))
-st.caption(
-    "Atur langsung di tab **Produk**: kolom **tipe** (kg/satuan) & **nama_olshopin** "
-    f"(nama katalog untuk ambil harga). {overridden} produk memakai override nama_olshopin."
-)
-
-st.subheader("Preview perubahan (produk cocok)")
-df = pd.DataFrame([{
-    "Nama": p["nama"], "Tipe": p["tipe"],
-    "Jual lama": p["jual_lama"], "Jual baru": p["jual_baru"], "Δ jual": p["jual_baru"] - p["jual_lama"],
-    "Beli lama": p["beli_lama"], "Beli baru": p["beli_baru"], "Δ beli": p["beli_baru"] - p["beli_lama"],
-    "Olshopin": p["olshopin"],
-} for p in matched])
-st.dataframe(df, use_container_width=True, hide_index=True, height=420)
-
-with st.expander(f"Belum cocok ({len(unmatched)}) — dibiarkan apa adanya"):
-    st.dataframe(
-        pd.DataFrame([{"Nama": p["nama"], "Tipe": p["tipe"],
-                       "nama_olshopin (diisi tapi tak ada di katalog?)": p["olshopin"] or ""}
-                      for p in unmatched]),
-        use_container_width=True, hide_index=True,
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total produk", len(plan))
+    m2.metric("Cocok (akan diupdate)", len(matched))
+    m3.metric("Belum cocok", len(unmatched))
+    st.caption(
+        "Atur langsung di tab **Produk**: kolom **tipe** (kg/satuan) & **nama_olshopin** "
+        f"(nama katalog untuk ambil harga). {overridden} produk memakai override nama_olshopin."
     )
-    st.caption("Untuk mencocokkan: buka tab **Produk**, isi kolom **nama_olshopin** "
-               "dengan nama persis di katalog Olshopin (lalu Tarik katalog & cek lagi).")
 
-st.divider()
-st.warning("Menerapkan akan **menimpa** harga_jual_edit & harga_beli_edit untuk "
-           f"{len(matched)} produk yang cocok. Yang belum cocok tidak diubah.")
-if st.button(f"💾 Terapkan ke Sheet ({len(matched)} produk)", type="primary"):
-    with st.spinner("Menulis ke sheet…"):
-        n = S.apply_updates(ws, plan)
-    st.success(f"✅ Selesai — {n} produk diperbarui di tab Produk.")
-    st.balloons()
+    st.subheader("Preview perubahan (produk cocok)")
+    df = pd.DataFrame([{
+        "Nama": p["nama"], "Tipe": p["tipe"],
+        "Jual lama": p["jual_lama"], "Jual baru": p["jual_baru"], "Δ jual": p["jual_baru"] - p["jual_lama"],
+        "Beli lama": p["beli_lama"], "Beli baru": p["beli_baru"], "Δ beli": p["beli_baru"] - p["beli_lama"],
+        "Olshopin": p["olshopin"],
+    } for p in matched])
+    st.dataframe(df, use_container_width=True, hide_index=True, height=420)
+
+    with st.expander(f"Belum cocok ({len(unmatched)}) — dibiarkan apa adanya"):
+        st.dataframe(
+            pd.DataFrame([{"Nama": p["nama"], "Tipe": p["tipe"],
+                           "nama_olshopin (diisi tapi tak ada di katalog?)": p["olshopin"] or ""}
+                          for p in unmatched]),
+            use_container_width=True, hide_index=True,
+        )
+        st.caption("Untuk mencocokkan: buka tab **Produk**, isi kolom **nama_olshopin** "
+                   "dengan nama persis di katalog Olshopin (lalu Tarik katalog & cek lagi).")
+
+    st.divider()
+    st.warning("Menerapkan akan **menimpa** harga_jual_edit & harga_beli_edit untuk "
+               f"{len(matched)} produk yang cocok. Yang belum cocok tidak diubah.")
+    if st.button(f"💾 Terapkan ke Sheet ({len(matched)} produk)", type="primary"):
+        with st.spinner("Menulis ke sheet…"):
+            n = S.apply_updates(ws, plan)
+        st.success(f"✅ Selesai — {n} produk diperbarui di tab Produk.")
+        st.balloons()
 
 st.divider()
 st.header("📦 Proyeksi Stok Habis")
@@ -122,7 +126,9 @@ st.caption(
 cabang_records = load_cabang()
 cabang_list = sorted({r["Nama Cabang"] for r in cabang_records if r.get("Nama Cabang")})
 
-if not cabang_list:
+if not catalog:
+    st.info("Klik **Tarik katalog Olshopin** di atas dulu supaya stok real-time-nya kebaca.")
+elif not cabang_list:
     st.warning("Data master **Cabang** masih kosong. Isi dulu tab Cabang di Google Sheet.")
 else:
     c3, c4 = st.columns([1, 1])
@@ -187,53 +193,53 @@ st.divider()
 st.subheader("⬆️ Upload Data Penjualan")
 st.caption(
     "Upload export **TransaksiBarang** dari Kasir Pintar (.xls) — sumber rata-rata "
-    "penjualan harian di atas. Bisa pilih banyak file sekaligus (mis. semua file "
-    "mingguan 6 bulan terakhir). Upload ulang untuk bulan yang sama akan **menimpa** "
-    "data bulan itu (aman dipakai untuk koreksi), jadi file dari bulan yang sama "
-    "sebaiknya diupload sekaligus dalam satu proses."
+    "penjualan harian di atas. Tidak perlu tarik katalog Olshopin dulu. Bisa pilih "
+    "banyak file sekaligus (mis. semua file mingguan 6 bulan terakhir). Upload ulang "
+    "untuk bulan yang sama akan **menimpa** data bulan itu (aman dipakai untuk koreksi), "
+    "jadi file dari bulan yang sama sebaiknya diupload sekaligus dalam satu proses."
 )
 
 if not cabang_list:
-    st.stop()
+    st.warning("Data master **Cabang** masih kosong. Isi dulu tab Cabang di Google Sheet.")
+else:
+    up_cabang = st.selectbox("Cabang untuk file yang diupload", cabang_list, key="upload_cabang")
+    ups = st.file_uploader(
+        "File .xls Kasir Pintar (sheet TransaksiBarang)", type=["xls"],
+        accept_multiple_files=True, key="upload_penjualan_files",
+    )
 
-up_cabang = st.selectbox("Cabang untuk file yang diupload", cabang_list, key="upload_cabang")
-ups = st.file_uploader(
-    "File .xls Kasir Pintar (sheet TransaksiBarang)", type=["xls"],
-    accept_multiple_files=True, key="upload_penjualan_files",
-)
+    if ups:
+        total_mb = sum(u.size for u in ups) / (1024 * 1024)
+        st.caption(f"{len(ups)} file dipilih, total {total_mb:.1f} MB.")
+        if st.button(f"📥 Proses & simpan {len(ups)} file → {up_cabang}", type="primary"):
+            frames, gagal = [], []
+            with st.spinner(f"Membaca {len(ups)} file…"):
+                for u in ups:
+                    size_mb = u.size / (1024 * 1024)
+                    if size_mb > 20:
+                        gagal.append(f"{u.name}: {size_mb:.0f} MB > batas 20 MB, dilewati.")
+                        continue
+                    try:
+                        frames.append(parse_transaksi(u.getvalue()))
+                    except ValueError as e:
+                        gagal.append(f"{u.name}: {e}")
 
-if ups:
-    total_mb = sum(u.size for u in ups) / (1024 * 1024)
-    st.caption(f"{len(ups)} file dipilih, total {total_mb:.1f} MB.")
-    if st.button(f"📥 Proses & simpan {len(ups)} file → {up_cabang}", type="primary"):
-        frames, gagal = [], []
-        with st.spinner(f"Membaca {len(ups)} file…"):
-            for u in ups:
-                size_mb = u.size / (1024 * 1024)
-                if size_mb > 20:
-                    gagal.append(f"{u.name}: {size_mb:.0f} MB > batas 20 MB, dilewati.")
-                    continue
-                try:
-                    frames.append(parse_transaksi(u.getvalue()))
-                except ValueError as e:
-                    gagal.append(f"{u.name}: {e}")
+            for g in gagal:
+                st.warning(g)
 
-        for g in gagal:
-            st.warning(g)
-
-        if frames:
-            with st.spinner("Menyimpan ke histori penjualan…"):
-                df = pd.concat(frames, ignore_index=True)
-                df["Bulan"] = df["Timestamp"].dt.strftime("%Y-%m")
-                ringkasan = []
-                for bulan, grp in df.groupby("Bulan"):
-                    qty_per_produk = grp.groupby("Nama")["Jumlah"].sum().to_dict()
-                    hari = int(grp["Timestamp"].dt.date.nunique())
-                    SH.replace_month(up_cabang, bulan, qty_per_produk, hari)
-                    ringkasan.append((bulan, hari, len(qty_per_produk)))
-            st.success(
-                f"✅ Tersimpan {len(df):,} baris transaksi untuk {up_cabang}:".replace(",", ".")
-            )
-            for bulan, hari, n_produk in sorted(ringkasan):
-                st.caption(f"- **{bulan}**: {hari} hari tercakup, {n_produk} produk.")
-            st.rerun()
+            if frames:
+                with st.spinner("Menyimpan ke histori penjualan…"):
+                    df = pd.concat(frames, ignore_index=True)
+                    df["Bulan"] = df["Timestamp"].dt.strftime("%Y-%m")
+                    ringkasan = []
+                    for bulan, grp in df.groupby("Bulan"):
+                        qty_per_produk = grp.groupby("Nama")["Jumlah"].sum().to_dict()
+                        hari = int(grp["Timestamp"].dt.date.nunique())
+                        SH.replace_month(up_cabang, bulan, qty_per_produk, hari)
+                        ringkasan.append((bulan, hari, len(qty_per_produk)))
+                st.success(
+                    f"✅ Tersimpan {len(df):,} baris transaksi untuk {up_cabang}:".replace(",", ".")
+                )
+                for bulan, hari, n_produk in sorted(ringkasan):
+                    st.caption(f"- **{bulan}**: {hari} hari tercakup, {n_produk} produk.")
+                st.rerun()
