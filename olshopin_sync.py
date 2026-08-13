@@ -68,7 +68,9 @@ def fetch_catalog():
 
 # ---------------- normalisasi & aturan ----------------
 def norm(s):
-    return re.sub(r"\s+", " ", str(s or "").strip().lower())
+    s = re.sub(r"\s+", " ", str(s or "").strip().lower())
+    s = re.sub(r"\bkgan\b", "kg an", s)      # samakan 'kgan' dgn 'kg an' (anti-typo)
+    return s
 
 
 def _strip_kg(n):
