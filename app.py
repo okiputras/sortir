@@ -27,6 +27,7 @@ pg = st.navigation(
         ),
         st.Page("views/laporan_sortir.py", title="Laporan Sortir", icon="📉"),
         st.Page("views/laporan_operasional.py", title="Laporan Operasional", icon="📊"),
+        st.Page("views/update_harga.py", title="Update Harga (Olshopin)", icon="💰"),
     ]
 )
 pg.run()
