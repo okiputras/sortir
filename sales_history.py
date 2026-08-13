@@ -20,20 +20,16 @@ Upload lewat UI tetap jalan seperti biasa utk nambah bulan/cabang berikutnya.
 """
 import json
 import os
-import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from gsheet_client import get_spreadsheet
+from olshopin_sync import norm  # normalizer sama dgn yg dipakai cocokkan nama katalog Olshopin
 
 JAKARTA = ZoneInfo("Asia/Jakarta")
 SHEET_NAME = "PenjualanBulanan"
 HEADER = ["Cabang", "Bulan", "Produk", "Qty", "Hari", "Timestamp"]
 SEED_FILE = os.path.join(os.path.dirname(__file__), "sales_history_seed.json")
-
-
-def norm(s) -> str:
-    return re.sub(r"\s+", " ", str(s or "").strip().lower())
 
 
 def _seed_rows() -> list[dict]:

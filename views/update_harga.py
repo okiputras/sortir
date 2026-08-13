@@ -5,9 +5,11 @@ tab Produk (kolom harga_jual_edit & harga_beli_edit).
 
 Juga berisi Proyeksi Stok Habis (stok real-time Olshopin vs rata-rata
 penjualan harian) & Upload Data Penjualan (sumber data histori penjualan).
+Proyeksi ini jalan dari SELURUH katalog Olshopin, tidak terikat ke tab
+Produk -- tab Produk cuma dipakai sinkronisasi harga (section paling atas).
 
-Produk yang belum cocok otomatis dibiarkan; pemetaan manual dibaca dari tab
-ProdukMapping (nama_barang_edit | nama_olshopin).
+Produk yang belum cocok (sinkronisasi harga) otomatis dibiarkan; pemetaan
+manual dibaca dari tab ProdukMapping (nama_barang_edit | nama_olshopin).
 
 Dikunci login owner (session "ops_authenticated"), sama seperti Laporan Sortir.
 """
@@ -19,7 +21,7 @@ import streamlit as st
 from gsheet_client import get_spreadsheet, load_cabang
 import olshopin_sync as S
 import sales_history as SH
-from sales_upload import normalize_name, parse_transaksi
+from sales_upload import parse_transaksi
 
 st.title("💰 Update Harga (Olshopin)")
 
@@ -63,7 +65,6 @@ if c2.button("🧹 Bersihkan cache"):
     st.info("Cache katalog dibersihkan. Klik 'Tarik katalog' untuk ambil ulang.")
 
 catalog = st.session_state.get("olshop_catalog")
-matched = []  # dipakai lagi di section Proyeksi Stok di bawah
 
 if not catalog:
     st.info("Klik **Tarik katalog Olshopin** untuk mulai perbandingan harga & lihat stok real-time.")
@@ -118,9 +119,10 @@ else:
 st.divider()
 st.header("📦 Proyeksi Stok Habis")
 st.caption(
-    "Bandingkan **stok real-time Olshopin** dengan rata-rata penjualan harian "
-    "(dari data penjualan yang sudah diupload di bagian bawah halaman ini) untuk "
-    "tahu produk mana yang harus segera di-restock."
+    "Semua produk di **katalog Olshopin** (bukan cuma yang ada di tab Produk -- "
+    "termasuk indomie, saori, dan barang sembako/kemasan lain) dibandingkan stok "
+    "real-time-nya dengan rata-rata penjualan harian, supaya kelihatan produk apa "
+    "saja yang harus segera di-restock."
 )
 
 cabang_records = load_cabang()
@@ -148,15 +150,16 @@ else:
             "**Upload Data Penjualan** di bawah supaya proyeksi bisa dihitung."
         )
     else:
-        velocity = SH.avg_daily_qty(cabang_pilih, months=6)
+        velocity = SH.avg_daily_qty(cabang_pilih, months=6)  # {nama_norm: (nama_asli, avg/hari)}
         baris, tanpa_histori = [], []
-        for p in matched:
-            v = velocity.get(normalize_name(p["nama"]))
+        for nama_ol, (harga_jual, stok) in catalog.items():
+            n = S.norm(nama_ol)
+            v = velocity.get(n) or velocity.get(S._strip_kg(n))  # sama spt pencocokan harga di atas
             avg = v[1] if v else 0.0
-            hh = SH.hari_habis(p["stok"], avg)
+            hh = SH.hari_habis(stok, avg)
             item = {
-                "Nama": p["nama"],
-                "Stok Olshopin": p["stok"],
+                "Nama": nama_ol,
+                "Stok Olshopin": stok,
                 "Rata² Terjual/Hari": round(avg, 2),
                 "Proyeksi Habis (hari)": round(hh, 1) if hh is not None else None,
             }
