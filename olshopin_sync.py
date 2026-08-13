@@ -20,7 +20,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 OLSHOP_TID = "1543660"
 OLSHOP_BASE = f"https://olshopin.com/t/{OLSHOP_TID}"
 CATALOG_LIMIT = 5000          # ?limit= -> ambil semua produk dalam 1 request
-MAPPING_TAB = "ProdukMapping"
 POTONG_KG = 4000
 POTONG_SATUAN = 500
 _UA = {"User-Agent": "Mozilla/5.0"}
@@ -88,33 +87,10 @@ def hitung_beli(harga_jual, kg):
     return max(0, hj - (POTONG_KG if kg else POTONG_SATUAN))
 
 
-# ---------------- mapping manual ----------------
-def load_mapping(spreadsheet):
-    """Baca tab ProdukMapping (nama_barang_edit | nama_olshopin) -> {norm(nama_tab): nama_olshopin}."""
-    try:
-        ws = spreadsheet.worksheet(MAPPING_TAB)
-    except Exception:
-        return {}
-    out = {}
-    for row in ws.get_all_values()[1:]:
-        if len(row) >= 2 and row[0].strip() and row[1].strip():
-            out[norm(row[0])] = row[1].strip()
-    return out
-
-
-def save_mapping(spreadsheet, pairs):
-    """pairs: list of (nama_tab, nama_olshopin). Tulis/replace tab ProdukMapping."""
-    try:
-        ws = spreadsheet.worksheet(MAPPING_TAB)
-        ws.clear()
-    except Exception:
-        ws = spreadsheet.add_worksheet(title=MAPPING_TAB, rows=max(len(pairs) + 10, 20), cols=2)
-    data = [["nama_barang_edit", "nama_olshopin"]] + [[a, b] for a, b in pairs]
-    ws.update(data, "A1", value_input_option="RAW")
-    return ws
-
-
 # ---------------- pencocokan & rencana ----------------
+# Override diambil dari tab Produk itu sendiri:
+#   kolom D = tipe          (kg / satuan; kosong -> auto-deteksi dari nama)
+#   kolom E = nama_olshopin (nama katalog; kosong -> auto-cocokkan dari nama)
 def _index(catalog):
     idx = {}
     for nama, hj in catalog.items():
@@ -122,18 +98,12 @@ def _index(catalog):
     return idx
 
 
-def _match(nama_tab, idx, manual):
-    n = norm(nama_tab)
-    if n in manual:
-        t = norm(manual[n])
-        if t in idx:
-            return idx[t]
-    if n in idx:
-        return idx[n]
-    nk = _strip_kg(n)
-    if nk in idx:
-        return idx[nk]
-    return None
+def resolve_kg(nama, tipe_cell):
+    """True bila kg. Pakai flag kolom 'tipe' bila diisi, selain itu auto dari nama."""
+    t = norm(tipe_cell)
+    if t:
+        return "kg" in t          # "kg"/"kg an" -> kg; "satuan" -> bukan
+    return is_kg(nama)
 
 
 def _to_int(v):
@@ -143,8 +113,9 @@ def _to_int(v):
         return 0
 
 
-def plan_updates(produk_rows, catalog, manual):
-    """produk_rows: list [nama, harga_jual_edit, harga_beli_edit] (mulai baris data).
+def plan_updates(produk_rows, catalog):
+    """produk_rows: baris tab Produk mulai baris data, tiap baris:
+    [nama, harga_jual_edit, harga_beli_edit, tipe, nama_olshopin].
     Return list dict rencana per baris (row_no mulai 2)."""
     idx = _index(catalog)
     out = []
@@ -154,19 +125,27 @@ def plan_updates(produk_rows, catalog, manual):
             continue
         jual_lama = _to_int(row[1]) if len(row) > 1 else 0
         beli_lama = _to_int(row[2]) if len(row) > 2 else 0
-        kg = is_kg(nama)
-        hit = _match(nama, idx, manual)
+        tipe_cell = row[3] if len(row) > 3 else ""
+        ol_cell = (row[4].strip() if len(row) > 4 and row[4] else "")
+        kg = resolve_kg(nama, tipe_cell)
+
+        if ol_cell:
+            hit = idx.get(norm(ol_cell))            # override manual (kolom E)
+        else:
+            n = norm(nama)
+            hit = idx.get(n) or idx.get(_strip_kg(n))
+
         rec = {"row_no": i + 2, "nama": nama, "tipe": "kg" if kg else "satuan",
                "jual_lama": jual_lama, "beli_lama": beli_lama,
                "jual_raw": row[1] if len(row) > 1 else "",
                "beli_raw": row[2] if len(row) > 2 else "",
-               "matched": hit is not None}
+               "override": bool(ol_cell), "matched": hit is not None}
         if hit:
             olname, hj = hit
             rec.update(olshopin=olname, jual_baru=_to_int(hj),
                        beli_baru=hitung_beli(hj, kg))
         else:
-            rec.update(olshopin=None, jual_baru=jual_lama, beli_baru=beli_lama)
+            rec.update(olshopin=ol_cell or None, jual_baru=jual_lama, beli_baru=beli_lama)
         out.append(rec)
     return out
 
