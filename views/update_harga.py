@@ -211,34 +211,58 @@ else:
     if ups:
         total_mb = sum(u.size for u in ups) / (1024 * 1024)
         st.caption(f"{len(ups)} file dipilih, total {total_mb:.1f} MB.")
-        if st.button(f"📥 Proses & simpan {len(ups)} file → {up_cabang}", type="primary"):
-            frames, gagal = [], []
-            with st.spinner(f"Membaca {len(ups)} file…"):
+        # Server Railway cuma 512 MB RAM. Batas per-file (20 MB) sudah ada di
+        # parse_transaksi's caller sejak fitur Laporan Sortir, tapi upload
+        # multi-file baru ini juga perlu batas TOTAL -- Streamlit menampung
+        # semua file yang dipilih di memori sekaligus sebelum kita sempat
+        # memprosesnya, jadi biarpun diproses satu-satu, "modal awal"-nya
+        # tetap sebesar total yang dipilih.
+        if total_mb > 60:
+            st.error(
+                f"Total {total_mb:.0f} MB terlalu besar untuk sekali proses di server ini "
+                "(server cuma 512 MB RAM). Upload bertahap, mis. per bulan (~5 file "
+                "mingguan) sekali proses."
+            )
+        elif st.button(f"📥 Proses & simpan {len(ups)} file → {up_cabang}", type="primary"):
+            # Agregat per bulan sambil jalan, lalu LEPAS DataFrame tiap file
+            # begitu kontribusinya sudah diambil -- supaya yang menumpuk di
+            # memori cuma satu file mentah + agregat (kecil), bukan seluruh
+            # file yang diupload sekaligus.
+            agg = {}  # bulan -> {"qty": {nama: total_qty}, "tanggal": {date, ...}}
+            gagal = []
+            total_baris = 0
+            with st.spinner(f"Memproses {len(ups)} file…"):
                 for u in ups:
                     size_mb = u.size / (1024 * 1024)
                     if size_mb > 20:
                         gagal.append(f"{u.name}: {size_mb:.0f} MB > batas 20 MB, dilewati.")
                         continue
                     try:
-                        frames.append(parse_transaksi(u.getvalue()))
+                        df = parse_transaksi(u.getvalue())
                     except ValueError as e:
                         gagal.append(f"{u.name}: {e}")
+                        continue
+
+                    total_baris += len(df)
+                    for bulan, grp in df.groupby(df["Timestamp"].dt.strftime("%Y-%m")):
+                        slot = agg.setdefault(bulan, {"qty": {}, "tanggal": set()})
+                        for nama, qty in grp.groupby("Nama")["Jumlah"].sum().items():
+                            slot["qty"][nama] = slot["qty"].get(nama, 0) + qty
+                        slot["tanggal"].update(grp["Timestamp"].dt.date)
+                    del df, grp  # lepas memori file ini sebelum lanjut ke file berikutnya
 
             for g in gagal:
                 st.warning(g)
 
-            if frames:
+            if agg:
                 with st.spinner("Menyimpan ke histori penjualan…"):
-                    df = pd.concat(frames, ignore_index=True)
-                    df["Bulan"] = df["Timestamp"].dt.strftime("%Y-%m")
                     ringkasan = []
-                    for bulan, grp in df.groupby("Bulan"):
-                        qty_per_produk = grp.groupby("Nama")["Jumlah"].sum().to_dict()
-                        hari = int(grp["Timestamp"].dt.date.nunique())
-                        SH.replace_month(up_cabang, bulan, qty_per_produk, hari)
-                        ringkasan.append((bulan, hari, len(qty_per_produk)))
+                    for bulan, slot in agg.items():
+                        hari = len(slot["tanggal"])
+                        SH.replace_month(up_cabang, bulan, slot["qty"], hari)
+                        ringkasan.append((bulan, hari, len(slot["qty"])))
                 st.success(
-                    f"✅ Tersimpan {len(df):,} baris transaksi untuk {up_cabang}:".replace(",", ".")
+                    f"✅ Tersimpan {total_baris:,} baris transaksi untuk {up_cabang}:".replace(",", ".")
                 )
                 for bulan, hari, n_produk in sorted(ringkasan):
                     st.caption(f"- **{bulan}**: {hari} hari tercakup, {n_produk} produk.")
