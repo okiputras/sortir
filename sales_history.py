@@ -11,7 +11,15 @@ Rata-rata harian dihitung dari total qty semua bulan terpilih dibagi TOTAL
 hari cakupan semua bulan itu (bukan per-produk) -- supaya produk yang
 kebetulan tidak laku sama sekali di suatu bulan tetap kehitung "0" di bulan
 itu, tidak bikin rata-ratanya kelihatan lebih tinggi dari yang sebenarnya.
+
+Begitu tab "PenjualanBulanan" dibuat pertama kali (belum pernah ada), otomatis
+diisi dari sales_history_seed.json kalau file itu ada -- hasil belajar dari
+histori transaksi (data-sulfat/) yang sudah diproses sekali di lokal, supaya
+begitu di-deploy proyeksinya langsung jalan tanpa perlu upload manual dulu.
+Upload lewat UI tetap jalan seperti biasa utk nambah bulan/cabang berikutnya.
 """
+import json
+import os
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -21,18 +29,38 @@ from gsheet_client import get_spreadsheet
 JAKARTA = ZoneInfo("Asia/Jakarta")
 SHEET_NAME = "PenjualanBulanan"
 HEADER = ["Cabang", "Bulan", "Produk", "Qty", "Hari", "Timestamp"]
+SEED_FILE = os.path.join(os.path.dirname(__file__), "sales_history_seed.json")
 
 
 def norm(s) -> str:
     return re.sub(r"\s+", " ", str(s or "").strip().lower())
 
 
+def _seed_rows() -> list[dict]:
+    if not os.path.exists(SEED_FILE):
+        return []
+    with open(SEED_FILE, encoding="utf-8") as f:
+        seed = json.load(f)
+    ts = datetime.now(JAKARTA).strftime("%Y-%m-%d %H:%M:%S")
+    return [
+        {"Cabang": cabang, "Bulan": bulan, "Produk": nama, "Qty": qty,
+         "Hari": info["hari"], "Timestamp": ts}
+        for cabang, bulan_map in seed.items()
+        for bulan, info in bulan_map.items()
+        for nama, qty in info["qty"].items()
+    ]
+
+
 def _ws():
     sh = get_spreadsheet()
     titles = {w.title for w in sh.worksheets()}
     if SHEET_NAME not in titles:
-        w = sh.add_worksheet(title=SHEET_NAME, rows=1000, cols=len(HEADER))
+        w = sh.add_worksheet(title=SHEET_NAME, rows=100, cols=len(HEADER))
         w.update([HEADER], "A1")
+        seed = _seed_rows()
+        if seed:
+            w.append_rows([[r.get(c, "") for c in HEADER] for r in seed],
+                           value_input_option="USER_ENTERED")
         return w
     return sh.worksheet(SHEET_NAME)
 
@@ -58,9 +86,15 @@ def replace_month(cabang: str, bulan: str, qty_per_produk: dict, hari: int) -> N
         for nama, qty in qty_per_produk.items()
     ]
     all_rows = kept + new_rows
-    values = [HEADER] + [[r.get(c, "") for c in HEADER] for r in all_rows]
+    # clear() tidak mengecilkan grid sheet, cuma isinya -- lalu tulis header
+    # (1 baris, selalu muat) & append_rows utk isinya (auto-grow sheet kalau
+    # perlu, pola yang sama dipakai gsheet_client._append_rows), supaya tidak
+    # kejegal batas baris awal saat datanya sudah tumbuh lewat dari itu.
     ws.clear()
-    ws.update(values, "A1", value_input_option="USER_ENTERED")
+    ws.update([HEADER], "A1")
+    if all_rows:
+        ws.append_rows([[r.get(c, "") for c in HEADER] for r in all_rows],
+                        value_input_option="USER_ENTERED")
 
 
 def avg_daily_qty(cabang: str, months: int = 6) -> dict:
