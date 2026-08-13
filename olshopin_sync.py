@@ -1,10 +1,11 @@
 """
-Sinkronisasi harga produk dari katalog Olshopin (toko AIRIN FRESH MART).
+Sinkronisasi harga & stok produk dari katalog Olshopin (toko AIRIN FRESH MART).
 
 Alur:
-  fetch_catalog()  -> {nama_barang: harga_jual} dari semua halaman katalog
+  fetch_catalog()  -> {nama_barang: (harga_jual, stok)} dari semua halaman katalog
   load_mapping(sh) -> mapping manual {nama_tab -> nama_olshopin} dari tab ProdukMapping
-  plan_updates(...) -> daftar rencana perubahan per baris tab Produk
+  plan_updates(...) -> daftar rencana perubahan per baris tab Produk (termasuk stok
+                        Olshopin per produk, dipakai utk proyeksi stok habis)
   apply_updates(ws, plan) -> tulis harga_jual_edit & harga_beli_edit ke sheet
 
 Aturan harga beli (sesuai permintaan):
@@ -36,8 +37,12 @@ def _fetch_barangs(url):
     return json.loads(m.group(1))["barangs"]
 
 
+def _entry(x):
+    return (x["harga_jual"], int(x.get("stok") or 0))
+
+
 def fetch_catalog():
-    """Ambil seluruh katalog -> dict {nama_barang: harga_jual}.
+    """Ambil seluruh katalog -> dict {nama_barang: (harga_jual, stok)}.
 
     Cara cepat: 1 request pakai ?limit= (server mengembalikan semua produk).
     Fallback: paginasi 20/halaman (paralel) bila limit tidak lengkap."""
@@ -46,21 +51,21 @@ def fetch_catalog():
         data = b.get("data", [])
         total = int(b.get("total") or 0)
         if data and len(data) >= total:
-            return {x["nama_barang"]: x["harga_jual"] for x in data}
+            return {x["nama_barang"]: _entry(x) for x in data}
     except Exception:
         pass
 
     # fallback paginasi
     first = _fetch_barangs(f"{OLSHOP_BASE}?page=1")
     last = int(first.get("last_page", 1) or 1)
-    catalog = {x["nama_barang"]: x["harga_jual"] for x in first.get("data", [])}
+    catalog = {x["nama_barang"]: _entry(x) for x in first.get("data", [])}
     if last > 1:
         with ThreadPoolExecutor(max_workers=8) as ex:
             futs = [ex.submit(_fetch_barangs, f"{OLSHOP_BASE}?page={p}") for p in range(2, last + 1)]
             for f in as_completed(futs):
                 try:
                     for x in f.result().get("data", []):
-                        catalog[x["nama_barang"]] = x["harga_jual"]
+                        catalog[x["nama_barang"]] = _entry(x)
                 except Exception:
                     pass
     return catalog
@@ -95,8 +100,8 @@ def hitung_beli(harga_jual, kg):
 #   kolom E = nama_olshopin (nama katalog; kosong -> auto-cocokkan dari nama)
 def _index(catalog):
     idx = {}
-    for nama, hj in catalog.items():
-        idx[norm(nama)] = (nama, hj)
+    for nama, (hj, stok) in catalog.items():
+        idx[norm(nama)] = (nama, hj, stok)
     return idx
 
 
@@ -143,11 +148,11 @@ def plan_updates(produk_rows, catalog):
                "beli_raw": row[2] if len(row) > 2 else "",
                "override": bool(ol_cell), "matched": hit is not None}
         if hit:
-            olname, hj = hit
+            olname, hj, stok = hit
             rec.update(olshopin=olname, jual_baru=_to_int(hj),
-                       beli_baru=hitung_beli(hj, kg))
+                       beli_baru=hitung_beli(hj, kg), stok=stok)
         else:
-            rec.update(olshopin=ol_cell or None, jual_baru=jual_lama, beli_baru=beli_lama)
+            rec.update(olshopin=ol_cell or None, jual_baru=jual_lama, beli_baru=beli_lama, stok=None)
         out.append(rec)
     return out
 
