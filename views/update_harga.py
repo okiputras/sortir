@@ -44,15 +44,20 @@ if not st.session_state.ops_authenticated:
     st.stop()
 
 st.caption(
-    "Ambil harga jual terbaru dari katalog Olshopin berdasarkan nama produk, "
-    "hitung harga beli otomatis (**kg −4.000**, **satuan −500**), lalu tulis "
-    "ke tab **Produk**."
+    "Ambil harga jual terbaru dari katalog Olshopin **toko SULFAT** berdasarkan "
+    "nama produk, hitung harga beli otomatis (**kg −4.000**, **satuan −500**), "
+    "lalu tulis ke tab **Produk**. (Proyeksi Stok di bawah bisa pilih cabang lain.)"
 )
 
 
 @st.cache_data(ttl=21600, show_spinner=False)
 def _catalog():
     return S.fetch_catalog()
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _catalog_for(tid):
+    return S.fetch_catalog(tid)
 
 
 c1, c2 = st.columns([1, 1])
@@ -119,78 +124,85 @@ else:
 st.divider()
 st.header("📦 Proyeksi Stok Habis")
 st.caption(
-    "Semua produk di **katalog Olshopin** (bukan cuma yang ada di tab Produk -- "
-    "termasuk indomie, saori, dan barang sembako/kemasan lain) dibandingkan stok "
-    "real-time-nya dengan rata-rata penjualan harian, supaya kelihatan produk apa "
-    "saja yang harus segera di-restock."
+    "Semua produk di **katalog Olshopin cabang terpilih** (bukan cuma yang ada "
+    "di tab Produk -- termasuk indomie, saori, dan barang sembako/kemasan lain) "
+    "dibandingkan stok real-time-nya dengan rata-rata penjualan harian, supaya "
+    "kelihatan produk apa saja yang harus segera di-restock. **Tiap cabang punya "
+    "toko Olshopin & stok sendiri-sendiri** (bukan gabungan)."
 )
 
 cabang_records = load_cabang()
 cabang_list = sorted({r["Nama Cabang"] for r in cabang_records if r.get("Nama Cabang")})
 
-if not catalog:
-    st.info("Klik **Tarik katalog Olshopin** di atas dulu supaya stok real-time-nya kebaca.")
-elif not cabang_list:
+if not cabang_list:
     st.warning("Data master **Cabang** masih kosong. Isi dulu tab Cabang di Google Sheet.")
 else:
     c3, c4 = st.columns([1, 1])
-    cabang_pilih = c3.selectbox(
-        "Cabang (acuan data penjualan yang dibandingkan ke stok Olshopin)",
-        cabang_list, key="proyeksi_cabang",
-    )
+    cabang_pilih = c3.selectbox("Cabang", cabang_list, key="proyeksi_cabang")
     hari_target = c4.number_input(
         "Order kalau stok bakal habis dalam berapa hari?",
         min_value=1, max_value=90, value=5, step=1, key="proyeksi_hari",
     )
 
-    bulan_ada = sorted(SH.bulan_terupload(cabang_pilih), reverse=True)
-    if not bulan_ada:
-        st.info(
-            f"Belum ada data penjualan untuk **{cabang_pilih}**. Upload dulu di bagian "
-            "**Upload Data Penjualan** di bawah supaya proyeksi bisa dihitung."
+    tid = S.CABANG_TID.get(cabang_pilih)
+    if not tid:
+        st.warning(
+            f"Belum ada toko Olshopin terdaftar untuk cabang **{cabang_pilih}** "
+            "(tambahkan di `olshopin_sync.CABANG_TID`)."
         )
     else:
-        velocity = SH.avg_daily_qty(cabang_pilih, months=6)  # {nama_norm: (nama_asli, avg/hari)}
-        baris, tanpa_histori = [], []
-        for nama_ol, (harga_jual, stok) in catalog.items():
-            n = S.norm(nama_ol)
-            v = velocity.get(n) or velocity.get(S._strip_kg(n))  # sama spt pencocokan harga di atas
-            avg = v[1] if v else 0.0
-            hh = SH.hari_habis(stok, avg)
-            item = {
-                "Nama": nama_ol,
-                "Stok Olshopin": stok,
-                "Rata² Terjual/Hari": round(avg, 2),
-                "Proyeksi Habis (hari)": round(hh, 1) if hh is not None else None,
-            }
-            (baris if hh is not None else tanpa_histori).append(item)
-
-        st.caption(
-            f"Data penjualan **{cabang_pilih}** tersedia untuk bulan: {', '.join(bulan_ada)} "
-            f"({len(bulan_ada)} bulan, dipakai maks. 6 bulan terbaru)."
-        )
-
-        urgent = sorted((b for b in baris if b["Proyeksi Habis (hari)"] <= hari_target),
-                         key=lambda b: b["Proyeksi Habis (hari)"])
-        st.subheader(f"\U0001F534 Segera order — proyeksi habis ≤ {hari_target} hari ({len(urgent)} produk)")
-        if urgent:
-            st.dataframe(pd.DataFrame(urgent), use_container_width=True, hide_index=True)
+        bulan_ada = sorted(SH.bulan_terupload(cabang_pilih), reverse=True)
+        if not bulan_ada:
+            st.info(
+                f"Belum ada data penjualan untuk **{cabang_pilih}**. Upload dulu di bagian "
+                "**Upload Data Penjualan** di bawah supaya proyeksi bisa dihitung."
+            )
         else:
-            st.success("Tidak ada produk yang diproyeksikan habis dalam rentang ini.")
+            with st.spinner(f"Menarik katalog Olshopin {cabang_pilih}…"):
+                catalog_cabang = _catalog_for(tid)
+            st.caption(f"Katalog Olshopin {cabang_pilih}: {len(catalog_cabang):,} produk.".replace(",", "."))
 
-        aman = sorted((b for b in baris if b["Proyeksi Habis (hari)"] > hari_target),
-                      key=lambda b: b["Proyeksi Habis (hari)"])
-        with st.expander(f"Aman — proyeksi habis > {hari_target} hari ({len(aman)} produk)"):
-            st.dataframe(pd.DataFrame(aman), use_container_width=True, hide_index=True)
+            velocity = SH.avg_daily_qty(cabang_pilih, months=6)  # {nama_norm: (nama_asli, avg/hari)}
+            baris, tanpa_histori = [], []
+            for nama_ol, (harga_jual, stok) in catalog_cabang.items():
+                n = S.norm(nama_ol)
+                v = velocity.get(n) or velocity.get(S._strip_kg(n))  # sama spt pencocokan harga di atas
+                avg = v[1] if v else 0.0
+                hh = SH.hari_habis(stok, avg)
+                item = {
+                    "Nama": nama_ol,
+                    "Stok Olshopin": stok,
+                    "Rata² Terjual/Hari": round(avg, 2),
+                    "Proyeksi Habis (hari)": round(hh, 1) if hh is not None else None,
+                }
+                (baris if hh is not None else tanpa_histori).append(item)
 
-        if tanpa_histori:
-            with st.expander(
-                f"Belum ada histori penjualan ({len(tanpa_histori)} produk, belum bisa diproyeksikan)"
-            ):
-                st.dataframe(
-                    pd.DataFrame(tanpa_histori).drop(columns=["Proyeksi Habis (hari)"]),
-                    use_container_width=True, hide_index=True,
-                )
+            st.caption(
+                f"Data penjualan **{cabang_pilih}** tersedia untuk bulan: {', '.join(bulan_ada)} "
+                f"({len(bulan_ada)} bulan, dipakai maks. 6 bulan terbaru)."
+            )
+
+            urgent = sorted((b for b in baris if b["Proyeksi Habis (hari)"] <= hari_target),
+                             key=lambda b: b["Proyeksi Habis (hari)"])
+            st.subheader(f"\U0001F534 Segera order — proyeksi habis ≤ {hari_target} hari ({len(urgent)} produk)")
+            if urgent:
+                st.dataframe(pd.DataFrame(urgent), use_container_width=True, hide_index=True)
+            else:
+                st.success("Tidak ada produk yang diproyeksikan habis dalam rentang ini.")
+
+            aman = sorted((b for b in baris if b["Proyeksi Habis (hari)"] > hari_target),
+                          key=lambda b: b["Proyeksi Habis (hari)"])
+            with st.expander(f"Aman — proyeksi habis > {hari_target} hari ({len(aman)} produk)"):
+                st.dataframe(pd.DataFrame(aman), use_container_width=True, hide_index=True)
+
+            if tanpa_histori:
+                with st.expander(
+                    f"Belum ada histori penjualan ({len(tanpa_histori)} produk, belum bisa diproyeksikan)"
+                ):
+                    st.dataframe(
+                        pd.DataFrame(tanpa_histori).drop(columns=["Proyeksi Habis (hari)"]),
+                        use_container_width=True, hide_index=True,
+                    )
 
 st.divider()
 st.subheader("⬆️ Upload Data Penjualan")

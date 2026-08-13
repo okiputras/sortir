@@ -1,11 +1,16 @@
 """
 Sinkronisasi harga & stok produk dari katalog Olshopin (toko AIRIN FRESH MART).
 
+Tiap cabang toko fisik punya toko Olshopin sendiri (TID beda) dgn stok yg
+independen -- SULFAT dan PIRANHA BUKAN satu katalog gabungan. Lihat CABANG_TID.
+
 Alur:
-  fetch_catalog()  -> {nama_barang: (harga_jual, stok)} dari semua halaman katalog
-  load_mapping(sh) -> mapping manual {nama_tab -> nama_olshopin} dari tab ProdukMapping
-  plan_updates(...) -> daftar rencana perubahan per baris tab Produk (termasuk stok
-                        Olshopin per produk, dipakai utk proyeksi stok habis)
+  fetch_catalog(tid) -> {nama_barang: (harga_jual, stok)} dari semua halaman katalog
+                         toko dgn TID itu (default: toko SULFAT, dipakai sinkronisasi
+                         harga di tab Produk -- lihat modul ini apa adanya sejak awal)
+  load_mapping(sh)   -> mapping manual {nama_tab -> nama_olshopin} dari tab ProdukMapping
+  plan_updates(...)  -> daftar rencana perubahan per baris tab Produk (termasuk stok
+                         Olshopin per produk, dipakai utk proyeksi stok habis)
   apply_updates(ws, plan) -> tulis harga_jual_edit & harga_beli_edit ke sheet
 
 Aturan harga beli (sesuai permintaan):
@@ -18,8 +23,11 @@ import json
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-OLSHOP_TID = "1543660"
-OLSHOP_BASE = f"https://olshopin.com/t/{OLSHOP_TID}"
+CABANG_TID = {
+    "SULFAT": "1543660",
+    "PIRANHA": "2420073",
+}
+OLSHOP_TID = CABANG_TID["SULFAT"]  # default: dipakai sinkronisasi harga tab Produk
 CATALOG_LIMIT = 5000          # ?limit= -> ambil semua produk dalam 1 request
 POTONG_KG = 4000
 POTONG_SATUAN = 500
@@ -41,13 +49,14 @@ def _entry(x):
     return (x["harga_jual"], int(x.get("stok") or 0))
 
 
-def fetch_catalog():
-    """Ambil seluruh katalog -> dict {nama_barang: (harga_jual, stok)}.
+def fetch_catalog(tid=OLSHOP_TID):
+    """Ambil seluruh katalog toko `tid` -> dict {nama_barang: (harga_jual, stok)}.
 
     Cara cepat: 1 request pakai ?limit= (server mengembalikan semua produk).
     Fallback: paginasi 20/halaman (paralel) bila limit tidak lengkap."""
+    base = f"https://olshopin.com/t/{tid}"
     try:
-        b = _fetch_barangs(f"{OLSHOP_BASE}?limit={CATALOG_LIMIT}")
+        b = _fetch_barangs(f"{base}?limit={CATALOG_LIMIT}")
         data = b.get("data", [])
         total = int(b.get("total") or 0)
         if data and len(data) >= total:
@@ -56,12 +65,12 @@ def fetch_catalog():
         pass
 
     # fallback paginasi
-    first = _fetch_barangs(f"{OLSHOP_BASE}?page=1")
+    first = _fetch_barangs(f"{base}?page=1")
     last = int(first.get("last_page", 1) or 1)
     catalog = {x["nama_barang"]: _entry(x) for x in first.get("data", [])}
     if last > 1:
         with ThreadPoolExecutor(max_workers=8) as ex:
-            futs = [ex.submit(_fetch_barangs, f"{OLSHOP_BASE}?page={p}") for p in range(2, last + 1)]
+            futs = [ex.submit(_fetch_barangs, f"{base}?page={p}") for p in range(2, last + 1)]
             for f in as_completed(futs):
                 try:
                     for x in f.result().get("data", []):
