@@ -50,7 +50,7 @@ def _catalog():
 
 c1, c2 = st.columns([1, 1])
 if c1.button("🔄 Tarik katalog Olshopin", type="primary"):
-    with st.spinner("Menarik katalog (~1.665 produk / 84 halaman)…"):
+    with st.spinner("Menarik katalog Olshopin (1 request, ~1–2 dtk)…"):
         st.session_state.olshop_catalog = _catalog()
 if c2.button("🧹 Bersihkan cache"):
     _catalog.clear()

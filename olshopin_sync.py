@@ -18,7 +18,8 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 OLSHOP_TID = "1543660"
-OLSHOP_URL = f"https://olshopin.com/t/{OLSHOP_TID}?page="
+OLSHOP_BASE = f"https://olshopin.com/t/{OLSHOP_TID}"
+CATALOG_LIMIT = 5000          # ?limit= -> ambil semua produk dalam 1 request
 MAPPING_TAB = "ProdukMapping"
 POTONG_KG = 4000
 POTONG_SATUAN = 500
@@ -27,25 +28,36 @@ _RE_SHOP = re.compile(r"window\.__SHOP_HOME__\s*=\s*(\{.*?\});", re.S)
 
 
 # ---------------- fetch katalog ----------------
-def _fetch_page(page):
-    req = urllib.request.Request(OLSHOP_URL + str(page), headers=_UA)
-    html = urllib.request.urlopen(req, timeout=25).read().decode("utf-8", "replace")
+def _fetch_barangs(url):
+    req = urllib.request.Request(url, headers=_UA)
+    html = urllib.request.urlopen(req, timeout=40).read().decode("utf-8", "replace")
     m = _RE_SHOP.search(html)
     if not m:
-        return {"data": [], "last_page": 1}
+        return {"data": [], "last_page": 1, "total": 0}
     return json.loads(m.group(1))["barangs"]
 
 
 def fetch_catalog():
-    """Ambil seluruh katalog -> dict {nama_barang: harga_jual}. Paralel antar halaman."""
-    first = _fetch_page(1)
+    """Ambil seluruh katalog -> dict {nama_barang: harga_jual}.
+
+    Cara cepat: 1 request pakai ?limit= (server mengembalikan semua produk).
+    Fallback: paginasi 20/halaman (paralel) bila limit tidak lengkap."""
+    try:
+        b = _fetch_barangs(f"{OLSHOP_BASE}?limit={CATALOG_LIMIT}")
+        data = b.get("data", [])
+        total = int(b.get("total") or 0)
+        if data and len(data) >= total:
+            return {x["nama_barang"]: x["harga_jual"] for x in data}
+    except Exception:
+        pass
+
+    # fallback paginasi
+    first = _fetch_barangs(f"{OLSHOP_BASE}?page=1")
     last = int(first.get("last_page", 1) or 1)
-    catalog = {}
-    for x in first.get("data", []):
-        catalog[x["nama_barang"]] = x["harga_jual"]
+    catalog = {x["nama_barang"]: x["harga_jual"] for x in first.get("data", [])}
     if last > 1:
         with ThreadPoolExecutor(max_workers=8) as ex:
-            futs = [ex.submit(_fetch_page, p) for p in range(2, last + 1)]
+            futs = [ex.submit(_fetch_barangs, f"{OLSHOP_BASE}?page={p}") for p in range(2, last + 1)]
             for f in as_completed(futs):
                 try:
                     for x in f.result().get("data", []):
