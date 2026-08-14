@@ -58,7 +58,9 @@ for row in produk_rows:
     nama = row[0] if row else ""
     if not str(nama).strip():
         continue
-    satuan = row[3].strip() if len(row) > 3 and row[3] else "-"
+    tipe_cell = row[3] if len(row) > 3 else ""
+    satuan = tipe_cell.strip() if tipe_cell else "-"
+    is_kg = S.resolve_kg(nama, tipe_cell)  # sama persis dgn logika sinkronisasi harga
     n = S.norm(nama)
     vp = pagi_map.get(n) or pagi_map.get(S._strip_kg(n))
     vs = siang_map.get(n) or siang_map.get(S._strip_kg(n))
@@ -72,15 +74,18 @@ for row in produk_rows:
         "Siapkan jam 4 pagi": round(avg_pagi, 1),
         "Tambah jam 12 siang": round(avg_siang, 1),
         "Total/hari": round(avg_pagi + avg_siang, 1),
+        "_is_kg": is_kg,  # internal -- cuma dipakai buat urutan, dibuang sblm tampil
     })
 
 if not baris_jadwal:
     st.info("Belum ada produk di tab Produk yang cocok dengan histori penjualan.")
 else:
-    baris_jadwal.sort(key=lambda b: b["Total/hari"], reverse=True)
+    # satuan dulu, baru kg an -- dlm tiap kelompok diurutkan dari yg paling laris
+    baris_jadwal.sort(key=lambda b: (b["_is_kg"], -b["Total/hari"]))
     dipakai = bulan_ada_pagi[:jadwal_bulan]
     st.caption(
         f"Data **{jadwal_cabang}** dipakai dari {len(dipakai)} bulan terakhir yang ada: "
         f"{', '.join(dipakai)}."
     )
-    st.dataframe(pd.DataFrame(baris_jadwal), use_container_width=True, hide_index=True, height=420)
+    df_jadwal = pd.DataFrame(baris_jadwal).drop(columns=["_is_kg"])
+    st.dataframe(df_jadwal, use_container_width=True, hide_index=True, height=420)
