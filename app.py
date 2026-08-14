@@ -20,6 +20,7 @@ pg = st.navigation(
             default=True,
         ),
         st.Page("views/input_sortir.py", title="Input Sortir", icon="🥬"),
+        st.Page("views/jadwal_sayur.py", title="Jadwal Sayur Pagi/Siang", icon="⏰"),
         st.Page(
             "views/pengeluaran_operasional.py",
             title="Pengeluaran Operasional",
