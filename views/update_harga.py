@@ -205,6 +205,73 @@ else:
                     )
 
 st.divider()
+st.header("🥬 Jadwal Sayur Pagi/Siang")
+st.caption(
+    "Rata-rata terjual per hari, dipecah **sebelum jam 12 (siapkan jam 4 pagi)** "
+    "vs **jam 12 ke atas (tambah jam 12 siang)** -- khusus produk yang ada di tab "
+    "**Produk** (sayur sortir), biar sayur tidak keluar sekaligus semua pagi lalu "
+    "layu di showcase. Tujuannya mengurangi sortiran."
+)
+
+if not cabang_list:
+    st.warning("Data master **Cabang** masih kosong. Isi dulu tab Cabang di Google Sheet.")
+else:
+    c5, c6 = st.columns([1, 1])
+    jadwal_cabang = c5.selectbox("Cabang", cabang_list, key="jadwal_cabang")
+    jadwal_bulan = c6.number_input(
+        "Pakai berapa bulan data terakhir?",
+        min_value=1, max_value=12, value=3, step=1, key="jadwal_bulan",
+        help="Rasio pagi/siang bisa bergeser antar bulan (mis. bulan puasa) -- "
+             "coba beberapa angka & bandingkan kalau hasilnya jauh beda.",
+    )
+
+    SH.ensure_periode_seeded(jadwal_cabang)
+    bulan_ada_pagi = sorted(SH.bulan_terupload(jadwal_cabang, periode="Pagi"), reverse=True)
+    if not bulan_ada_pagi:
+        st.info(
+            f"Belum ada data penjualan untuk **{jadwal_cabang}**. Upload dulu di bagian "
+            "**Upload Data Penjualan** di bawah."
+        )
+    else:
+        sh2 = get_spreadsheet()
+        produk_rows = sh2.worksheet("Produk").get_all_values()[1:]
+
+        pagi_map = SH.avg_daily_qty(jadwal_cabang, months=jadwal_bulan, periode="Pagi")
+        siang_map = SH.avg_daily_qty(jadwal_cabang, months=jadwal_bulan, periode="Siang")
+
+        baris_jadwal = []
+        for row in produk_rows:
+            nama = row[0] if row else ""
+            if not str(nama).strip():
+                continue
+            satuan = row[3].strip() if len(row) > 3 and row[3] else "-"
+            n = S.norm(nama)
+            vp = pagi_map.get(n) or pagi_map.get(S._strip_kg(n))
+            vs = siang_map.get(n) or siang_map.get(S._strip_kg(n))
+            if not vp and not vs:
+                continue  # tidak ada histori sama sekali -- tidak usah ditampilkan
+            avg_pagi = vp[1] if vp else 0.0
+            avg_siang = vs[1] if vs else 0.0
+            baris_jadwal.append({
+                "Produk": nama,
+                "Satuan": satuan,
+                "Siapkan jam 4 pagi": round(avg_pagi, 1),
+                "Tambah jam 12 siang": round(avg_siang, 1),
+                "Total/hari": round(avg_pagi + avg_siang, 1),
+            })
+
+        if not baris_jadwal:
+            st.info("Belum ada produk di tab Produk yang cocok dengan histori penjualan.")
+        else:
+            baris_jadwal.sort(key=lambda b: b["Total/hari"], reverse=True)
+            dipakai = bulan_ada_pagi[:jadwal_bulan]
+            st.caption(
+                f"Data **{jadwal_cabang}** dipakai dari {len(dipakai)} bulan terakhir yang ada: "
+                f"{', '.join(dipakai)}."
+            )
+            st.dataframe(pd.DataFrame(baris_jadwal), use_container_width=True, hide_index=True, height=420)
+
+st.divider()
 st.subheader("⬆️ Upload Data Penjualan")
 st.caption(
     "Upload export **TransaksiBarang** dari Kasir Pintar (.xls) — sumber rata-rata "
@@ -243,7 +310,10 @@ else:
             # begitu kontribusinya sudah diambil -- supaya yang menumpuk di
             # memori cuma satu file mentah + agregat (kecil), bukan seluruh
             # file yang diupload sekaligus.
-            agg = {}  # bulan -> {"qty": {nama: total_qty}, "tanggal": {date, ...}}
+            # bulan -> {"tanggal": {date,...}, "Total"/"Pagi"/"Siang": {nama: qty}}
+            # Pagi = sblm jam 12 (batch keluar jam 4 pagi), Siang = jam 12+
+            # (batch tambahan keluar jam 12) -- dipakai Jadwal Sayur di bawah.
+            agg = {}
             gagal = []
             total_baris = 0
             with st.spinner(f"Memproses {len(ups)} file…"):
@@ -260,11 +330,17 @@ else:
 
                     total_baris += len(df)
                     for bulan, grp in df.groupby(df["Timestamp"].dt.strftime("%Y-%m")):
-                        slot = agg.setdefault(bulan, {"qty": {}, "tanggal": set()})
-                        for nama, qty in grp.groupby("Nama")["Jumlah"].sum().items():
-                            slot["qty"][nama] = slot["qty"].get(nama, 0) + qty
+                        slot = agg.setdefault(bulan, {"tanggal": set(), "Total": {}, "Pagi": {}, "Siang": {}})
                         slot["tanggal"].update(grp["Timestamp"].dt.date)
-                    del df, grp  # lepas memori file ini sebelum lanjut ke file berikutnya
+                        potongan = {
+                            "Total": grp,
+                            "Pagi": grp[grp["Timestamp"].dt.hour < 12],
+                            "Siang": grp[grp["Timestamp"].dt.hour >= 12],
+                        }
+                        for periode, bagian in potongan.items():
+                            for nama, qty in bagian.groupby("Nama")["Jumlah"].sum().items():
+                                slot[periode][nama] = slot[periode].get(nama, 0) + qty
+                    del df, grp, potongan  # lepas memori file ini sebelum lanjut ke file berikutnya
 
             for g in gagal:
                 st.warning(g)
@@ -274,8 +350,9 @@ else:
                     ringkasan = []
                     for bulan, slot in agg.items():
                         hari = len(slot["tanggal"])
-                        SH.replace_month(up_cabang, bulan, slot["qty"], hari)
-                        ringkasan.append((bulan, hari, len(slot["qty"])))
+                        for periode in ("Total", "Pagi", "Siang"):
+                            SH.replace_month(up_cabang, bulan, slot[periode], hari, periode=periode)
+                        ringkasan.append((bulan, hari, len(slot["Total"])))
                 st.success(
                     f"✅ Tersimpan {total_baris:,} baris transaksi untuk {up_cabang}:".replace(",", ".")
                 )

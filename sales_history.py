@@ -1,11 +1,17 @@
 """
-Histori penjualan bulanan per cabang & produk -- dipakai utk proyeksi "berapa
-hari lagi stok Olshopin bakal habis" di menu Update Harga (Olshopin).
+Histori penjualan bulanan per cabang & produk -- dipakai utk:
+  1. Proyeksi Stok Habis (stok real-time Olshopin vs rata-rata penjualan
+     harian) -- pakai Periode "Total" (semua jam digabung).
+  2. Jadwal Sayur Pagi/Siang (berapa banyak sayur disiapkan jam 4 pagi vs
+     ditambah jam 12 siang) -- pakai Periode "Pagi" (<jam 12) / "Siang"
+     (>=jam 12), khusus produk yg ada di tab Produk (sayur sortir).
 
-Data disimpan teragregasi per (Cabang, Bulan, Produk): total qty terjual +
-jumlah hari yang tercakup pada bulan itu (dari rentang tanggal sumber data
-yang diupload). Upload ulang utk cabang+bulan yang sama akan MENIMPA data
-bulan itu (bukan menumpuk), supaya aman diupload ulang kalau ada koreksi.
+Data disimpan teragregasi per (Cabang, Bulan, Periode, Produk): total qty
+terjual + jumlah hari yang tercakup pada bulan itu (dari rentang tanggal
+sumber data yang diupload -- SAMA utk ketiga periode, krn ini soal berapa
+hari kalender yang datanya ada, bukan soal jam laris/tidaknya). Upload ulang
+utk cabang+bulan+periode yang sama akan MENIMPA data itu (bukan menumpuk),
+supaya aman diupload ulang kalau ada koreksi.
 
 Rata-rata harian dihitung dari total qty semua bulan terpilih dibagi TOTAL
 hari cakupan semua bulan itu (bukan per-produk) -- supaya produk yang
@@ -14,9 +20,12 @@ itu, tidak bikin rata-ratanya kelihatan lebih tinggi dari yang sebenarnya.
 
 Begitu tab "PenjualanBulanan" dibuat pertama kali (belum pernah ada), otomatis
 diisi dari sales_history_seed.json kalau file itu ada -- hasil belajar dari
-histori transaksi (data-sulfat/) yang sudah diproses sekali di lokal, supaya
-begitu di-deploy proyeksinya langsung jalan tanpa perlu upload manual dulu.
-Upload lewat UI tetap jalan seperti biasa utk nambah bulan/cabang berikutnya.
+histori transaksi (data-sulfat/, data-piranha/) yang sudah diproses sekali
+di lokal, supaya begitu di-deploy datanya langsung ada tanpa perlu upload
+manual dulu. Kalau sheet-nya sudah ada dari SEBELUM Periode Pagi/Siang
+ditambahkan (jadi cuma punya baris Total), panggil ensure_periode_seeded()
+utk isi susulan -- lihat fungsi itu. Upload lewat UI tetap jalan seperti
+biasa utk nambah bulan/cabang berikutnya (ketiga periode sekaligus).
 """
 import json
 import os
@@ -28,21 +37,35 @@ from olshopin_sync import norm  # normalizer sama dgn yg dipakai cocokkan nama k
 
 JAKARTA = ZoneInfo("Asia/Jakarta")
 SHEET_NAME = "PenjualanBulanan"
-HEADER = ["Cabang", "Bulan", "Produk", "Qty", "Hari", "Timestamp"]
+# "Periode" sengaja di PALING AKHIR (bukan disisipkan di tengah): baris lama
+# dari sblm kolom ini ada (6 kolom, urutan Cabang..Timestamp) tetap kebaca
+# benar apa adanya (zip berhenti di kolom ke-6, Periode dianggap kosong ->
+# "Total" lewat _periode_of) -- kalau disisipkan di tengah, baris lama jadi
+# geser kolom dan datanya rusak waktu dibaca ulang.
+HEADER = ["Cabang", "Bulan", "Produk", "Qty", "Hari", "Timestamp", "Periode"]
 SEED_FILE = os.path.join(os.path.dirname(__file__), "sales_history_seed.json")
 
 
-def _seed_rows() -> list[dict]:
+def _periode_of(r: dict) -> str:
+    return r.get("Periode") or "Total"  # baris lama (sblm kolom ini ada) = Total
+
+
+def _load_seed_json() -> dict:
     if not os.path.exists(SEED_FILE):
-        return []
+        return {}
     with open(SEED_FILE, encoding="utf-8") as f:
-        seed = json.load(f)
+        return json.load(f)
+
+
+def _seed_rows() -> list[dict]:
+    seed = _load_seed_json()
     ts = datetime.now(JAKARTA).strftime("%Y-%m-%d %H:%M:%S")
     return [
-        {"Cabang": cabang, "Bulan": bulan, "Produk": nama, "Qty": qty,
-         "Hari": info["hari"], "Timestamp": ts}
+        {"Cabang": cabang, "Bulan": bulan, "Periode": periode, "Produk": nama,
+         "Qty": qty, "Hari": info["hari"], "Timestamp": ts}
         for cabang, bulan_map in seed.items()
-        for bulan, info in bulan_map.items()
+        for bulan, periode_map in bulan_map.items()
+        for periode, info in periode_map.items()
         for nama, qty in info["qty"].items()
     ]
 
@@ -65,20 +88,55 @@ def load_all() -> list[dict]:
     return _ws().get_all_records()
 
 
-def bulan_terupload(cabang: str) -> set:
-    """Set bulan ('YYYY-MM') yang sudah ada datanya utk cabang ini."""
-    return {r["Bulan"] for r in load_all() if r.get("Cabang") == cabang and r.get("Bulan")}
+def ensure_periode_seeded(cabang: str) -> None:
+    """Backfill baris Pagi/Siang dari seed file utk cabang ini, KALAU sheet-nya
+    sudah ada dari sebelum kolom Periode ditambahkan (jadi belum pernah punya
+    baris Pagi/Siang sama sekali). Aman dipanggil berkali-kali -- begitu ada
+    baris Pagi/Siang (dari seed ataupun upload manual), tidak akan menimpa
+    atau menambah dobel lagi."""
+    rows = load_all()
+    if any(r.get("Cabang") == cabang and _periode_of(r) in ("Pagi", "Siang") for r in rows):
+        return
+    seed_cabang = _load_seed_json().get(cabang, {})
+    if not seed_cabang:
+        return
+    ts = datetime.now(JAKARTA).strftime("%Y-%m-%d %H:%M:%S")
+    new_rows = []
+    for bulan, periode_map in seed_cabang.items():
+        for periode in ("Pagi", "Siang"):
+            info = periode_map.get(periode)
+            if not info:
+                continue
+            for nama, qty in info["qty"].items():
+                new_rows.append({"Cabang": cabang, "Bulan": bulan, "Periode": periode,
+                                  "Produk": nama, "Qty": qty, "Hari": info["hari"], "Timestamp": ts})
+    if new_rows:
+        ws = _ws()
+        ws.update([HEADER], "A1")  # refresh header (sheet lama mungkin blm punya kolom Periode)
+        ws.append_rows([[r.get(c, "") for c in HEADER] for r in new_rows],
+                        value_input_option="USER_ENTERED")
 
 
-def replace_month(cabang: str, bulan: str, qty_per_produk: dict, hari: int) -> None:
-    """Timpa data (cabang, bulan) ini dengan hasil parse baru.
-    qty_per_produk: {nama_produk_asli: qty_total}."""
+def bulan_terupload(cabang: str, periode: str = "Total") -> set:
+    """Set bulan ('YYYY-MM') yang sudah ada datanya utk cabang+periode ini."""
+    return {r["Bulan"] for r in load_all()
+            if r.get("Cabang") == cabang and _periode_of(r) == periode and r.get("Bulan")}
+
+
+def replace_month(cabang: str, bulan: str, qty_per_produk: dict, hari: int,
+                   periode: str = "Total") -> None:
+    """Timpa data (cabang, bulan, periode) ini dengan hasil parse baru --
+    periode lain (mis. Total tetap utuh saat yang ditimpa cuma Pagi) tidak
+    kesenggol. qty_per_produk: {nama_produk_asli: qty_total}."""
     ws = _ws()
     existing = ws.get_all_records()
     ts = datetime.now(JAKARTA).strftime("%Y-%m-%d %H:%M:%S")
-    kept = [r for r in existing if not (r.get("Cabang") == cabang and r.get("Bulan") == bulan)]
+    kept = [r for r in existing
+            if not (r.get("Cabang") == cabang and r.get("Bulan") == bulan
+                    and _periode_of(r) == periode)]
     new_rows = [
-        {"Cabang": cabang, "Bulan": bulan, "Produk": nama, "Qty": qty, "Hari": hari, "Timestamp": ts}
+        {"Cabang": cabang, "Bulan": bulan, "Periode": periode, "Produk": nama,
+         "Qty": qty, "Hari": hari, "Timestamp": ts}
         for nama, qty in qty_per_produk.items()
     ]
     all_rows = kept + new_rows
@@ -93,10 +151,10 @@ def replace_month(cabang: str, bulan: str, qty_per_produk: dict, hari: int) -> N
                         value_input_option="USER_ENTERED")
 
 
-def avg_daily_qty(cabang: str, months: int = 6) -> dict:
+def avg_daily_qty(cabang: str, months: int = 6, periode: str = "Total") -> dict:
     """{nama_norm: (nama_display, rata2_qty_per_hari)} dari <=`months` bulan
-    TERBARU yang ada datanya utk cabang ini."""
-    rows = [r for r in load_all() if r.get("Cabang") == cabang]
+    TERBARU yang ada datanya utk cabang+periode ini."""
+    rows = [r for r in load_all() if r.get("Cabang") == cabang and _periode_of(r) == periode]
     if not rows:
         return {}
 
