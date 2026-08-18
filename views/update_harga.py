@@ -44,6 +44,50 @@ if not st.session_state.ops_authenticated:
                 st.error("Username / password salah.")
     st.stop()
 
+st.header("🔧 Perbarui Tipe dari Nama Produk")
+st.caption(
+    "Deteksi ulang kolom **tipe** dari nama produk di tab Produk -- berguna "
+    "kalau baru selesai rapikan nama (mis. tambah \"kgan\" di nama produk "
+    "kg-an). Cuma menyentuh baris yang namanya menunjukkan kg tapi kolom "
+    "tipe-nya belum \"kg\" -- baris lain (termasuk yang tipenya \"ikat\"/label "
+    "lain) tidak diubah."
+)
+
+sh_tipe = get_spreadsheet()
+ws_tipe = sh_tipe.worksheet("Produk")
+rows_tipe = ws_tipe.get_all_values()[1:]
+
+rencana_tipe = []
+for i, row in enumerate(rows_tipe):
+    nama_tipe = row[0] if row else ""
+    if not str(nama_tipe).strip():
+        continue
+    tipe_lama = row[3].strip() if len(row) > 3 and row[3] else ""
+    tipe_lama_kg = "kg" in S.norm(tipe_lama) if tipe_lama else False
+    if S.is_kg(nama_tipe) and not tipe_lama_kg:
+        rencana_tipe.append({
+            "row_no": i + 2, "Nama": nama_tipe, "Tipe Lama": tipe_lama or "(kosong)",
+        })
+
+st.caption(f"{len(rows_tipe)} produk dicek, **{len(rencana_tipe)} perlu diperbarui ke \"kg\"**.")
+
+if rencana_tipe:
+    with st.expander(f"Preview perubahan ({len(rencana_tipe)} produk)"):
+        st.dataframe(
+            pd.DataFrame([{"Nama": r["Nama"], "Tipe Lama": r["Tipe Lama"], "Tipe Baru": "kg"}
+                          for r in rencana_tipe]),
+            use_container_width=True, hide_index=True, height=320,
+        )
+    if st.button(f"💾 Terapkan tipe \"kg\" ({len(rencana_tipe)} produk)", key="terapkan_tipe"):
+        with st.spinner("Menulis kolom tipe…"):
+            for r in rencana_tipe:
+                ws_tipe.update([["kg"]], f"D{r['row_no']}", value_input_option="USER_ENTERED")
+        st.success(f"✅ Kolom tipe diperbarui untuk {len(rencana_tipe)} produk.")
+        st.rerun()
+else:
+    st.success("Semua kolom tipe sudah sesuai dengan nama produk saat ini.")
+
+st.divider()
 st.caption(
     "Ambil harga jual terbaru dari katalog Olshopin **toko SULFAT** berdasarkan "
     "nama produk, hitung harga beli otomatis (**kg −4.000**, **satuan −500**), "
