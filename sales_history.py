@@ -18,6 +18,11 @@ hari cakupan semua bulan itu (bukan per-produk) -- supaya produk yang
 kebetulan tidak laku sama sekali di suatu bulan tetap kehitung "0" di bulan
 itu, tidak bikin rata-ratanya kelihatan lebih tinggi dari yang sebenarnya.
 
+trend_avg_qty() menambahkan rata-rata bertren (regresi linear per bulan,
+lihat fungsi itu) di atas rata-rata flat -- dipakai supaya cabang yang
+penjualannya lagi naik/turun (bukan stagnan) tidak salah diproyeksikan pakai
+rata-rata lama yang sudah tidak mewakili kondisi sekarang.
+
 Begitu tab "PenjualanBulanan" dibuat pertama kali (belum pernah ada), otomatis
 diisi dari sales_history_seed.json kalau file itu ada -- hasil belajar dari
 histori transaksi (data-sulfat/, data-piranha/) yang sudah diproses sekali
@@ -151,9 +156,12 @@ def replace_month(cabang: str, bulan: str, qty_per_produk: dict, hari: int,
                         value_input_option="USER_ENTERED")
 
 
-def avg_daily_qty(cabang: str, months: int = 6, periode: str = "Total") -> dict:
+def avg_daily_qty(cabang: str, months: int = 6, periode: str = "Total",
+                   exclude_bulan=None) -> dict:
     """{nama_norm: (nama_display, rata2_qty_per_hari)} dari <=`months` bulan
-    TERBARU yang ada datanya utk cabang+periode ini."""
+    TERBARU yang ada datanya utk cabang+periode ini (bulan di `exclude_bulan`
+    tidak ikut dipilih sama sekali, mis. buat buang bulan puasa/anomali)."""
+    exclude_bulan = set(exclude_bulan or ())
     rows = [r for r in load_all() if r.get("Cabang") == cabang and _periode_of(r) == periode]
     if not rows:
         return {}
@@ -161,7 +169,7 @@ def avg_daily_qty(cabang: str, months: int = 6, periode: str = "Total") -> dict:
     hari_per_bulan = {}
     for r in rows:
         b = r.get("Bulan")
-        if b and b not in hari_per_bulan:
+        if b and b not in exclude_bulan and b not in hari_per_bulan:
             hari_per_bulan[b] = float(r.get("Hari") or 0)
     bulan_terpilih = set(sorted(hari_per_bulan, reverse=True)[:months])
     total_hari = sum(hari_per_bulan[b] for b in bulan_terpilih)
@@ -180,6 +188,103 @@ def avg_daily_qty(cabang: str, months: int = 6, periode: str = "Total") -> dict:
         qty_per_produk[n][0] += float(r.get("Qty") or 0)
 
     return {n: (nama, qty / total_hari) for n, (qty, nama) in qty_per_produk.items()}
+
+
+def monthly_series(cabang: str, months: int = 6, periode: str = "Total",
+                    exclude_bulan=None) -> dict:
+    """{nama_norm: (nama_display, [(bulan_index, rata2_qty_per_hari_bulan_itu), ...])}
+    dari <=`months` bulan TERBARU (dikurangi `exclude_bulan`), diurutkan
+    kronologis lama->baru (bulan_index 0,1,2,...) -- dipakai regresi tren.
+    Tiap bulan yg dipakai SELALU ada titiknya per produk (0 kalau produk itu
+    nol laku bulan itu), sama spt prinsip avg_daily_qty -- bulan sepi tetap
+    kehitung, bukan diabaikan begitu saja dari garis trennya."""
+    exclude_bulan = set(exclude_bulan or ())
+    rows = [r for r in load_all() if r.get("Cabang") == cabang and _periode_of(r) == periode]
+    if not rows:
+        return {}
+
+    hari_per_bulan = {}
+    for r in rows:
+        b = r.get("Bulan")
+        if b and b not in exclude_bulan and b not in hari_per_bulan:
+            hari_per_bulan[b] = float(r.get("Hari") or 0)
+    bulan_urut = sorted(sorted(hari_per_bulan, reverse=True)[:months])  # kronologis lama->baru
+    if not bulan_urut:
+        return {}
+    bulan_terpilih = set(bulan_urut)
+    idx_bulan = {b: i for i, b in enumerate(bulan_urut)}
+
+    qty_per_produk_per_bulan = {}  # nama_norm -> [nama_display, {bulan: qty}]
+    for r in rows:
+        b = r.get("Bulan")
+        if b not in bulan_terpilih:
+            continue
+        nama = str(r.get("Produk", "")).strip()
+        if not nama:
+            continue
+        n = norm(nama)
+        slot = qty_per_produk_per_bulan.setdefault(n, [nama, {}])
+        slot[1][b] = slot[1].get(b, 0.0) + float(r.get("Qty") or 0)
+
+    out = {}
+    for n, (nama, qty_bulan) in qty_per_produk_per_bulan.items():
+        # Buang bulan SEBELUM kemunculan pertama produk ini -- itu artinya
+        # produknya belum ada/belum dijual, bukan "terjual 0" (beda makna).
+        # Bulan kosong SETELAH kemunculan pertama tetap dihitung sbg titik 0,
+        # itu histori asli (produk pernah ada tapi lagi sepi/nol bulan itu).
+        bulan_mulai = min(qty_bulan)
+        bulan_dipakai = [b for b in bulan_urut if b >= bulan_mulai]
+        seri = [(idx_bulan[b], qty_bulan.get(b, 0.0) / hari_per_bulan[b]) for b in bulan_dipakai]
+        out[n] = (nama, seri)
+    return out
+
+
+def _linreg_nilai_terakhir(titik):
+    """titik: [(x, y), ...]. Regresi least-squares sederhana (tanpa numpy),
+    kembalikan (y_prediksi_di_x_terbesar, slope) -- y DIHALUSKAN di titik
+    TERAKHIR yg diamati, BUKAN diekstrapolasi lewat data yg ada (lebih aman,
+    tidak gampang meleset kalau trennya sebenarnya tidak linear terus).
+    None kalau titik x-nya kurang dari 2 nilai berbeda (regresi tak bermakna)."""
+    xs_unik = set(x for x, _ in titik)
+    if len(xs_unik) < 2:
+        return None
+    n = len(titik)
+    mean_x = sum(x for x, _ in titik) / n
+    mean_y = sum(y for _, y in titik) / n
+    num = sum((x - mean_x) * (y - mean_y) for x, y in titik)
+    den = sum((x - mean_x) ** 2 for x, _ in titik)
+    if den == 0:
+        return None
+    slope = num / den
+    intercept = mean_y - slope * mean_x
+    x_terakhir = max(x for x, _ in titik)
+    return max(0.0, intercept + slope * x_terakhir), slope
+
+
+def trend_avg_qty(cabang: str, months: int = 6, periode: str = "Total",
+                   exclude_bulan=None, min_bulan_tren: int = 3) -> dict:
+    """{nama_norm: (nama_display, rata2_flat, rata2_tren, slope_per_bulan)}.
+
+    rata2_flat = sama persis dgn avg_daily_qty() (total qty / total hari).
+    rata2_tren = hasil regresi linear di bulan TERAKHIR yg dipakai, supaya
+    produk yg lagi tren naik/turun tidak ketarik ke rata-rata lama yg sudah
+    tidak relevan (mis. cabang yang jualannya lagi tumbuh, 7 bulan lalu vs
+    sekarang beda jauh -- rata-rata flat meremehkan kondisi sekarang).
+    Fallback ke rata2_flat (slope=0.0) kalau datanya < `min_bulan_tren`
+    bulan -- regresi butuh cukup titik biar tidak asal nebak dari noise."""
+    flat_map = avg_daily_qty(cabang, months=months, periode=periode, exclude_bulan=exclude_bulan)
+    seri_map = monthly_series(cabang, months=months, periode=periode, exclude_bulan=exclude_bulan)
+
+    out = {}
+    for n, (nama, rata2_flat) in flat_map.items():
+        seri = seri_map.get(n, (nama, []))[1]
+        hasil = _linreg_nilai_terakhir(seri) if len(seri) >= min_bulan_tren else None
+        if hasil is None:
+            out[n] = (nama, rata2_flat, rata2_flat, 0.0)
+        else:
+            nilai_tren, slope = hasil
+            out[n] = (nama, rata2_flat, nilai_tren, slope)
+    return out
 
 
 def hari_habis(stok, avg_qty_per_hari):

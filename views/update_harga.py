@@ -127,9 +127,10 @@ st.header("📦 Proyeksi Stok Habis")
 st.caption(
     "Semua produk di **katalog Olshopin cabang terpilih** (bukan cuma yang ada "
     "di tab Produk -- termasuk indomie, saori, dan barang sembako/kemasan lain) "
-    "dibandingkan stok real-time-nya dengan rata-rata penjualan harian, supaya "
-    "kelihatan produk apa saja yang harus segera di-restock. **Tiap cabang punya "
-    "toko Olshopin & stok sendiri-sendiri** (bukan gabungan)."
+    "dibandingkan stok real-time-nya dengan rata-rata penjualan **bertren** "
+    "(bukan rata-rata datar -- cabang yang penjualannya lagi naik/turun tidak "
+    "ketarik ke rata-rata lama), supaya kelihatan produk apa saja yang harus "
+    "segera di-restock. **Tiap cabang punya toko Olshopin & stok sendiri-sendiri**."
 )
 
 cabang_records = load_cabang()
@@ -159,28 +160,55 @@ else:
                 "**Upload Data Penjualan** di bawah supaya proyeksi bisa dihitung."
             )
         else:
+            with st.expander("⚙️ Pengaturan perhitungan (rentang data, kecualikan bulan, buffer)"):
+                c5, c6 = st.columns([1, 1])
+                n_bulan = c5.number_input(
+                    "Pakai berapa bulan data terakhir?",
+                    min_value=1, max_value=len(bulan_ada), value=min(6, len(bulan_ada)),
+                    step=1, key="proyeksi_bulan",
+                )
+                buffer_pct = c6.number_input(
+                    "Buffer keamanan (%)", min_value=0, max_value=100, value=10, step=5,
+                    key="proyeksi_buffer",
+                    help="Ditambahkan ke rata-rata bertren sebelum dipakai hitung proyeksi, "
+                         "biar tidak pas-pasan.",
+                )
+                bulan_dikecualikan = st.multiselect(
+                    "Kecualikan bulan tertentu dari perhitungan (mis. bulan puasa)",
+                    options=bulan_ada, default=[], key="proyeksi_exclude",
+                )
+
             with st.spinner(f"Menarik katalog Olshopin {cabang_pilih}…"):
                 catalog_cabang = _catalog_for(tid)
             st.caption(f"Katalog Olshopin {cabang_pilih}: {len(catalog_cabang):,} produk.".replace(",", "."))
 
-            velocity = SH.avg_daily_qty(cabang_pilih, months=6)  # {nama_norm: (nama_asli, avg/hari)}
+            trend_map = SH.trend_avg_qty(  # {nama_norm: (nama_asli, flat, tren, slope)}
+                cabang_pilih, months=n_bulan, exclude_bulan=bulan_dikecualikan,
+            )
             baris, tanpa_histori = [], []
             for nama_ol, (harga_jual, stok) in catalog_cabang.items():
                 n = S.norm(nama_ol)
-                v = velocity.get(n) or velocity.get(S._strip_kg(n))  # sama spt pencocokan harga di atas
-                avg = v[1] if v else 0.0
-                hh = SH.hari_habis(stok, avg)
+                v = trend_map.get(n) or trend_map.get(S._strip_kg(n))  # sama spt pencocokan harga di atas
+                _, flat, tren, slope = v if v else (None, 0.0, 0.0, 0.0)
+                avg_dipakai = tren * (1 + buffer_pct / 100)
+                hh = SH.hari_habis(stok, avg_dipakai)
+                arah = "↑" if slope > 0.01 else ("↓" if slope < -0.01 else "→")
                 item = {
                     "Nama": nama_ol,
                     "Stok Olshopin": stok,
-                    "Rata² Terjual/Hari": round(avg, 2),
+                    "Tren": arah,
+                    "Rata² Dipakai (+buffer)": round(avg_dipakai, 2),
+                    "Rata² Historis (flat)": round(flat, 2),
                     "Proyeksi Habis (hari)": round(hh, 1) if hh is not None else None,
                 }
                 (baris if hh is not None else tanpa_histori).append(item)
 
+            bulan_dipakai_teks = [b for b in bulan_ada if b not in bulan_dikecualikan][:n_bulan]
             st.caption(
-                f"Data penjualan **{cabang_pilih}** tersedia untuk bulan: {', '.join(bulan_ada)} "
-                f"({len(bulan_ada)} bulan, dipakai maks. 6 bulan terbaru)."
+                f"Data penjualan **{cabang_pilih}** dipakai dari: {', '.join(bulan_dipakai_teks)} "
+                f"({len(bulan_dipakai_teks)} bulan"
+                + (f", {len(bulan_dikecualikan)} bulan dikecualikan" if bulan_dikecualikan else "")
+                + f"). Rata-rata dipakai sudah + buffer {buffer_pct}%."
             )
 
             urgent = sorted((b for b in baris if b["Proyeksi Habis (hari)"] <= hari_target),
@@ -250,6 +278,8 @@ else:
             # (batch tambahan keluar jam 12) -- dipakai halaman Jadwal Sayur.
             agg = {}
             gagal = []
+            catatan = []
+            seen_baris = set()  # (Timestamp, Nama, Jumlah, Total) yg sudah kehitung
             total_baris = 0
             with st.spinner(f"Memproses {len(ups)} file…"):
                 for u in ups:
@@ -262,6 +292,19 @@ else:
                     except ValueError as e:
                         gagal.append(f"{u.name}: {e}")
                         continue
+
+                    # Export Kasir Pintar kadang tumpang tindih persis satu sama
+                    # lain (sudah kejadian: 2 file identik, & 1 file yg isinya
+                    # subset penuh dari file lain) -- buang baris yg PERSIS sama
+                    # (Timestamp+Nama+Jumlah+Total) dgn yg sudah kehitung dari
+                    # file lain di batch upload yang sama, biar tidak dobel.
+                    kunci = list(zip(df["Timestamp"], df["Nama"], df["Jumlah"], df["Total"]))
+                    baru_mask = [k not in seen_baris for k in kunci]
+                    n_dup = len(df) - sum(baru_mask)
+                    if n_dup:
+                        catatan.append(f"{u.name}: {n_dup} baris dilewati (duplikat dari file lain di batch ini).")
+                    df = df[baru_mask]
+                    seen_baris.update(k for k, is_baru in zip(kunci, baru_mask) if is_baru)
 
                     total_baris += len(df)
                     for bulan, grp in df.groupby(df["Timestamp"].dt.strftime("%Y-%m")):
@@ -279,6 +322,8 @@ else:
 
             for g in gagal:
                 st.warning(g)
+            for c in catatan:
+                st.info(c)
 
             if agg:
                 with st.spinner("Menyimpan ke histori penjualan…"):

@@ -49,9 +49,25 @@ if not bulan_ada_pagi:
     )
     st.stop()
 
+with st.expander("⚙️ Pengaturan lanjutan (buffer, kecualikan bulan)"):
+    buffer_pct = st.number_input(
+        "Buffer keamanan (%)", min_value=0, max_value=100, value=10, step=5,
+        key="jadwal_buffer",
+        help="Ditambahkan ke rata-rata bertren sebelum jadi rekomendasi, biar tidak pas-pasan.",
+    )
+    bulan_dikecualikan = st.multiselect(
+        "Kecualikan bulan tertentu dari perhitungan (mis. bulan puasa)",
+        options=bulan_ada_pagi, default=[], key="jadwal_exclude",
+    )
+
 produk_rows = get_spreadsheet().worksheet("Produk").get_all_values()[1:]
-pagi_map = SH.avg_daily_qty(jadwal_cabang, months=jadwal_bulan, periode="Pagi")
-siang_map = SH.avg_daily_qty(jadwal_cabang, months=jadwal_bulan, periode="Siang")
+# trend_avg_qty -> {nama_norm: (nama_asli, rata2_flat, rata2_tren, slope)}; pakai
+# rata2_tren (bukan flat) supaya cabang yg lagi tren naik/turun (bukan stagnan)
+# tidak ketarik ke rata-rata lama yg sudah tidak mewakili kondisi sekarang.
+pagi_map = SH.trend_avg_qty(jadwal_cabang, months=jadwal_bulan, periode="Pagi",
+                             exclude_bulan=bulan_dikecualikan)
+siang_map = SH.trend_avg_qty(jadwal_cabang, months=jadwal_bulan, periode="Siang",
+                              exclude_bulan=bulan_dikecualikan)
 
 baris_jadwal = []
 for row in produk_rows:
@@ -66,14 +82,16 @@ for row in produk_rows:
     vs = siang_map.get(n) or siang_map.get(S._strip_kg(n))
     if not vp and not vs:
         continue  # tidak ada histori sama sekali -- tidak usah ditampilkan
-    avg_pagi = vp[1] if vp else 0.0
-    avg_siang = vs[1] if vs else 0.0
+    tren_pagi = vp[2] if vp else 0.0
+    tren_siang = vs[2] if vs else 0.0
+    pagi_dipakai = tren_pagi * (1 + buffer_pct / 100)
+    siang_dipakai = tren_siang * (1 + buffer_pct / 100)
     baris_jadwal.append({
         "Produk": nama,
         "Satuan": satuan,
-        "Siapkan jam 4 pagi": round(avg_pagi, 1),
-        "Tambah jam 12 siang": round(avg_siang, 1),
-        "Total/hari": round(avg_pagi + avg_siang, 1),
+        "Siapkan jam 4 pagi": round(pagi_dipakai, 1),
+        "Tambah jam 12 siang": round(siang_dipakai, 1),
+        "Total/hari": round(pagi_dipakai + siang_dipakai, 1),
         "_is_kg": is_kg,  # internal -- cuma dipakai buat urutan, dibuang sblm tampil
     })
 
@@ -82,10 +100,12 @@ if not baris_jadwal:
 else:
     # satuan dulu, baru kg an -- dlm tiap kelompok diurutkan dari yg paling laris
     baris_jadwal.sort(key=lambda b: (b["_is_kg"], -b["Total/hari"]))
-    dipakai = bulan_ada_pagi[:jadwal_bulan]
+    dipakai = [b for b in bulan_ada_pagi if b not in bulan_dikecualikan][:jadwal_bulan]
     st.caption(
         f"Data **{jadwal_cabang}** dipakai dari {len(dipakai)} bulan terakhir yang ada: "
-        f"{', '.join(dipakai)}."
+        f"{', '.join(dipakai)}"
+        + (f" ({len(bulan_dikecualikan)} bulan dikecualikan)" if bulan_dikecualikan else "")
+        + f". Sudah + buffer {buffer_pct}%."
     )
     df_jadwal = pd.DataFrame(baris_jadwal).drop(columns=["_is_kg"])
     st.dataframe(df_jadwal, use_container_width=True, hide_index=True, height=420)
