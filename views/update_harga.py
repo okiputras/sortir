@@ -80,9 +80,32 @@ if rencana_tipe:
         )
     if st.button(f"💾 Terapkan tipe \"kg\" ({len(rencana_tipe)} produk)", key="terapkan_tipe"):
         with st.spinner("Menulis kolom tipe…"):
+            # Baca ulang & VERIFIKASI nama tiap baris tepat sebelum menulis --
+            # kalau urutan baris sempat berubah (disortir manual/otomatis)
+            # sejak preview di atas dihitung, nomor baris lama bisa nyasar ke
+            # produk yang berbeda. Baris yang tidak lagi cocok dilewati (tidak
+            # ditulis) daripada salah menimpa produk lain. Ditulis sekaligus
+            # via batch_update (1 request), bukan satu-satu, supaya tidak ada
+            # jeda antar tulisan yang bisa kena resort di tengah jalan.
+            rows_terkini = ws_tipe.get_all_values()[1:]
+            updates, dilewati = [], []
             for r in rencana_tipe:
-                ws_tipe.update([["kg"]], f"D{r['row_no']}", value_input_option="USER_ENTERED")
-        st.success(f"✅ Kolom tipe diperbarui untuk {len(rencana_tipe)} produk.")
+                idx = r["row_no"] - 2
+                nama_terkini = rows_terkini[idx][0] if idx < len(rows_terkini) and rows_terkini[idx] else ""
+                if S.norm(nama_terkini) != S.norm(r["Nama"]):
+                    dilewati.append(r["Nama"])
+                    continue
+                updates.append({"range": f"D{r['row_no']}", "values": [["kg"]]})
+            if updates:
+                ws_tipe.batch_update(updates, value_input_option="USER_ENTERED")
+        if updates:
+            st.success(f"✅ Kolom tipe diperbarui untuk {len(updates)} produk.")
+        if dilewati:
+            st.warning(
+                f"{len(dilewati)} baris dilewati krn urutan baris berubah sejak preview "
+                f"dihitung (biar tidak salah tulis ke produk lain): {', '.join(dilewati)}. "
+                "Muat ulang halaman & coba lagi."
+            )
         st.rerun()
 else:
     st.success("Semua kolom tipe sudah sesuai dengan nama produk saat ini.")
