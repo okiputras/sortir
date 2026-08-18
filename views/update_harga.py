@@ -48,9 +48,12 @@ st.header("🔧 Perbarui Tipe dari Nama Produk")
 st.caption(
     "Deteksi ulang kolom **tipe** dari nama produk di tab Produk -- berguna "
     "kalau baru selesai rapikan nama (mis. tambah \"kgan\" di nama produk "
-    "kg-an). Cuma menyentuh baris yang namanya menunjukkan kg tapi kolom "
-    "tipe-nya belum \"kg\" -- baris lain (termasuk yang tipenya \"ikat\"/label "
-    "lain) tidak diubah."
+    "kg-an, atau lepas kata kg dari nama yg sekarang dijual satuan). "
+    "Menyentuh baris yang namanya menunjukkan kg tapi kolom tipe-nya belum "
+    "\"kg\" (diubah ke \"kg\"), dan baris yang namanya TIDAK menunjukkan kg "
+    "tapi kolom tipe-nya bukan \"satuan\" (mis. \"kg\", \"pack\", \"sisir\", "
+    "\"ikat\" -- semua diseragamkan jadi \"satuan\"). Baris yang kolom "
+    "tipe-nya masih kosong tidak disentuh (sudah otomatis kebaca satuan)."
 )
 
 sh_tipe = get_spreadsheet()
@@ -63,22 +66,27 @@ for i, row in enumerate(rows_tipe):
     if not str(nama_tipe).strip():
         continue
     tipe_lama = row[3].strip() if len(row) > 3 and row[3] else ""
-    tipe_lama_kg = "kg" in S.norm(tipe_lama) if tipe_lama else False
-    if S.is_kg(nama_tipe) and not tipe_lama_kg:
+    tipe_lama_norm = S.norm(tipe_lama) if tipe_lama else ""
+    nama_kg = S.is_kg(nama_tipe)
+    if nama_kg and "kg" not in tipe_lama_norm:
         rencana_tipe.append({
-            "row_no": i + 2, "Nama": nama_tipe, "Tipe Lama": tipe_lama or "(kosong)",
+            "row_no": i + 2, "Nama": nama_tipe, "Tipe Lama": tipe_lama or "(kosong)", "Tipe Baru": "kg",
+        })
+    elif not nama_kg and tipe_lama and tipe_lama_norm != "satuan":
+        rencana_tipe.append({
+            "row_no": i + 2, "Nama": nama_tipe, "Tipe Lama": tipe_lama or "(kosong)", "Tipe Baru": "satuan",
         })
 
-st.caption(f"{len(rows_tipe)} produk dicek, **{len(rencana_tipe)} perlu diperbarui ke \"kg\"**.")
+st.caption(f"{len(rows_tipe)} produk dicek, **{len(rencana_tipe)} perlu diperbarui**.")
 
 if rencana_tipe:
     with st.expander(f"Preview perubahan ({len(rencana_tipe)} produk)"):
         st.dataframe(
-            pd.DataFrame([{"Nama": r["Nama"], "Tipe Lama": r["Tipe Lama"], "Tipe Baru": "kg"}
+            pd.DataFrame([{"Nama": r["Nama"], "Tipe Lama": r["Tipe Lama"], "Tipe Baru": r["Tipe Baru"]}
                           for r in rencana_tipe]),
             use_container_width=True, hide_index=True, height=320,
         )
-    if st.button(f"💾 Terapkan tipe \"kg\" ({len(rencana_tipe)} produk)", key="terapkan_tipe"):
+    if st.button(f"💾 Terapkan tipe ({len(rencana_tipe)} produk)", key="terapkan_tipe"):
         with st.spinner("Menulis kolom tipe…"):
             # Baca ulang & VERIFIKASI nama tiap baris tepat sebelum menulis --
             # kalau urutan baris sempat berubah (disortir manual/otomatis)
@@ -95,7 +103,7 @@ if rencana_tipe:
                 if S.norm(nama_terkini) != S.norm(r["Nama"]):
                     dilewati.append(r["Nama"])
                     continue
-                updates.append({"range": f"D{r['row_no']}", "values": [["kg"]]})
+                updates.append({"range": f"D{r['row_no']}", "values": [[r["Tipe Baru"]]]})
             if updates:
                 ws_tipe.batch_update(updates, value_input_option="USER_ENTERED")
         if updates:
