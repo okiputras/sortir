@@ -18,6 +18,22 @@ from gsheet_client import get_spreadsheet, load_cabang
 import olshopin_sync as S
 import sales_history as SH
 
+# Default buffer per cabang & tipe -- hasil backtest walk-forward (bandingkan
+# proyeksi vs actual bulan berjalan, Apr-Jul 2026 dari data-sulfat/data-piranha)
+# nyari titik "siku": buffer terkecil yang masih naikkan service level banyak
+# sebelum kelebihan stok mulai melonjak gak sepadan. Kg butuh buffer lebih
+# besar drpd satuan krn satuan sudah dapat "napas" gratis dari pembulatan ke
+# atas (lihat bulat() di bawah) -- kg tetap desimal presisi, jadi lebih rawan
+# kurang kalau bufferny kekecilan. PIRANHA butuh lebih besar drpd SULFAT krn
+# penjualannya lagi tren naik (lebih volatil, lebih sering "ketinggalan" dari
+# tren regresi konservatif). Cabang di luar 2 ini fallback ke 10% (aman, blm
+# ada data buat backtest).
+DEFAULT_BUFFER = {
+    ("SULFAT", "kg"): 40, ("SULFAT", "satuan"): 20,
+    ("PIRANHA", "kg"): 50, ("PIRANHA", "satuan"): 20,
+}
+FALLBACK_BUFFER = 10
+
 st.title("🥬 Jadwal Sayur Pagi/Siang")
 st.caption(
     "Rata-rata terjual per hari, dipecah **sebelum jam 12 (siapkan jam 4 pagi)** "
@@ -52,10 +68,20 @@ if not bulan_ada_pagi:
     st.stop()
 
 with st.expander("⚙️ Pengaturan lanjutan (buffer, kecualikan bulan)"):
-    buffer_pct = st.number_input(
-        "Buffer keamanan (%)", min_value=0, max_value=100, value=10, step=5,
-        key="jadwal_buffer",
-        help="Ditambahkan ke rata-rata bertren sebelum jadi rekomendasi, biar tidak pas-pasan.",
+    bc1, bc2 = st.columns(2)
+    buffer_pct_kg = bc1.number_input(
+        "Buffer keamanan -- Kg-an (%)", min_value=0, max_value=200,
+        value=DEFAULT_BUFFER.get((jadwal_cabang, "kg"), FALLBACK_BUFFER), step=5,
+        key=f"jadwal_buffer_kg_{jadwal_cabang}",
+        help="Default sudah disetel per cabang dari hasil backtest (buffer terkecil yang "
+             "masih menaikkan akurasi banyak sebelum kelebihan stok melonjak gak sepadan).",
+    )
+    buffer_pct_satuan = bc2.number_input(
+        "Buffer keamanan -- Satuan (%)", min_value=0, max_value=200,
+        value=DEFAULT_BUFFER.get((jadwal_cabang, "satuan"), FALLBACK_BUFFER), step=5,
+        key=f"jadwal_buffer_satuan_{jadwal_cabang}",
+        help="Satuan (pcs/ikat) sudah dibulatkan ke atas, jadi biasanya butuh buffer "
+             "lebih kecil drpd kg-an.",
     )
     bulan_dikecualikan = st.multiselect(
         "Kecualikan bulan tertentu dari perhitungan (mis. bulan puasa)",
@@ -86,6 +112,7 @@ for row in produk_rows:
         continue  # tidak ada histori sama sekali -- tidak usah ditampilkan
     tren_pagi = vp[2] if vp else 0.0
     tren_siang = vs[2] if vs else 0.0
+    buffer_pct = buffer_pct_kg if is_kg else buffer_pct_satuan
     pagi_dipakai = tren_pagi * (1 + buffer_pct / 100)
     siang_dipakai = tren_siang * (1 + buffer_pct / 100)
     # Kg-an tetap desimal (rata-rata kg per hari wajar berupa pecahan). Satuan
@@ -111,7 +138,7 @@ else:
         f"Data **{jadwal_cabang}** dipakai dari {len(dipakai)} bulan terakhir yang ada: "
         f"{', '.join(dipakai)}"
         + (f" ({len(bulan_dikecualikan)} bulan dikecualikan)" if bulan_dikecualikan else "")
-        + f". Sudah + buffer {buffer_pct}%."
+        + f". Sudah + buffer {buffer_pct_kg}% (kg-an) / {buffer_pct_satuan}% (satuan)."
     )
     df_jadwal = pd.DataFrame(baris_jadwal).drop(columns=["_is_kg"])
     st.dataframe(df_jadwal, use_container_width=True, hide_index=True, height=420)

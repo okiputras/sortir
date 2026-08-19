@@ -25,6 +25,19 @@ import olshopin_sync as S
 import sales_history as SH
 from sales_upload import parse_transaksi
 
+# Default buffer per cabang & tipe -- hasil backtest walk-forward (bandingkan
+# proyeksi vs actual bulan berjalan, Apr-Jul 2026), cari titik "siku": buffer
+# terkecil yang masih naikkan akurasi banyak sebelum kelebihan stok melonjak
+# gak sepadan. Kg butuh buffer lebih besar drpd satuan krn satuan sudah dapat
+# "napas" gratis dari pembulatan ke atas. PIRANHA butuh lebih besar drpd
+# SULFAT krn penjualannya lagi tren naik (lebih volatil). Sama persis dgn yg
+# dipakai di Jadwal Sayur -- rumusnya (trend_avg_qty) sama.
+DEFAULT_BUFFER = {
+    ("SULFAT", "kg"): 40, ("SULFAT", "satuan"): 20,
+    ("PIRANHA", "kg"): 50, ("PIRANHA", "satuan"): 20,
+}
+FALLBACK_BUFFER = 10
+
 st.title("💰 Update Harga (Olshopin)")
 
 # --- LOGIN GATE (session sama dgn Pengeluaran/Laporan Sortir) ---
@@ -237,17 +250,26 @@ else:
             )
         else:
             with st.expander("⚙️ Pengaturan perhitungan (rentang data, kecualikan bulan, buffer)"):
-                c5, c6 = st.columns([1, 1])
+                c5, c6, c7 = st.columns([1, 1, 1])
                 n_bulan = c5.number_input(
                     "Pakai berapa bulan data terakhir?",
                     min_value=1, max_value=len(bulan_ada), value=min(6, len(bulan_ada)),
                     step=1, key="proyeksi_bulan",
                 )
-                buffer_pct = c6.number_input(
-                    "Buffer keamanan (%)", min_value=0, max_value=100, value=10, step=5,
-                    key="proyeksi_buffer",
-                    help="Ditambahkan ke rata-rata bertren sebelum dipakai hitung proyeksi, "
-                         "biar tidak pas-pasan.",
+                buffer_pct_kg = c6.number_input(
+                    "Buffer keamanan -- Kg-an (%)", min_value=0, max_value=200,
+                    value=DEFAULT_BUFFER.get((cabang_pilih, "kg"), FALLBACK_BUFFER), step=5,
+                    key=f"proyeksi_buffer_kg_{cabang_pilih}",
+                    help="Default sudah disetel per cabang dari hasil backtest (buffer terkecil "
+                         "yang masih menaikkan akurasi banyak sebelum kelebihan stok melonjak "
+                         "gak sepadan).",
+                )
+                buffer_pct_satuan = c7.number_input(
+                    "Buffer keamanan -- Satuan (%)", min_value=0, max_value=200,
+                    value=DEFAULT_BUFFER.get((cabang_pilih, "satuan"), FALLBACK_BUFFER), step=5,
+                    key=f"proyeksi_buffer_satuan_{cabang_pilih}",
+                    help="Satuan sudah dibulatkan ke atas, jadi biasanya butuh buffer lebih "
+                         "kecil drpd kg-an.",
                 )
                 bulan_dikecualikan = st.multiselect(
                     "Kecualikan bulan tertentu dari perhitungan (mis. bulan puasa)",
@@ -266,13 +288,15 @@ else:
                 n = S.norm(nama_ol)
                 v = trend_map.get(n) or trend_map.get(S._strip_kg(n))  # sama spt pencocokan harga di atas
                 _, flat, tren, slope = v if v else (None, 0.0, 0.0, 0.0)
+                is_kg_item = S.is_kg(nama_ol)
+                buffer_pct = buffer_pct_kg if is_kg_item else buffer_pct_satuan
                 avg_dipakai = tren * (1 + buffer_pct / 100)
                 hh = SH.hari_habis(stok, avg_dipakai)
                 arah = "↑" if slope > 0.01 else ("↓" if slope < -0.01 else "→")
                 # Kg-an tetap desimal (rata-rata kg per hari wajar berupa pecahan).
                 # Satuan (per pcs, tidak bisa "3.6 pcs") dibulatkan ke ATAS -- lebih
                 # baik siap kelebihan dikit drpd kurang siap, sama spt Jadwal Sayur.
-                bulat = (lambda x: round(x, 2)) if S.is_kg(nama_ol) else (lambda x: math.ceil(x))
+                bulat = (lambda x: round(x, 2)) if is_kg_item else (lambda x: math.ceil(x))
                 item = {
                     "Nama": nama_ol,
                     "Stok Olshopin": stok,
@@ -288,7 +312,7 @@ else:
                 f"Data penjualan **{cabang_pilih}** dipakai dari: {', '.join(bulan_dipakai_teks)} "
                 f"({len(bulan_dipakai_teks)} bulan"
                 + (f", {len(bulan_dikecualikan)} bulan dikecualikan" if bulan_dikecualikan else "")
-                + f"). Rata-rata dipakai sudah + buffer {buffer_pct}%."
+                + f"). Rata-rata dipakai sudah + buffer {buffer_pct_kg}% (kg-an) / {buffer_pct_satuan}% (satuan)."
             )
 
             urgent = sorted((b for b in baris if b["Proyeksi Habis (hari)"] <= hari_target),
