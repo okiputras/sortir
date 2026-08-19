@@ -14,6 +14,7 @@ manual dibaca dari tab ProdukMapping (nama_barang_edit | nama_olshopin).
 
 Dikunci login owner (session "ops_authenticated"), sama seperti Laporan Sortir.
 """
+import math
 import os
 
 import pandas as pd
@@ -268,12 +269,16 @@ else:
                 avg_dipakai = tren * (1 + buffer_pct / 100)
                 hh = SH.hari_habis(stok, avg_dipakai)
                 arah = "↑" if slope > 0.01 else ("↓" if slope < -0.01 else "→")
+                # Kg-an tetap desimal (rata-rata kg per hari wajar berupa pecahan).
+                # Satuan (per pcs, tidak bisa "3.6 pcs") dibulatkan ke ATAS -- lebih
+                # baik siap kelebihan dikit drpd kurang siap, sama spt Jadwal Sayur.
+                bulat = (lambda x: round(x, 2)) if S.is_kg(nama_ol) else (lambda x: math.ceil(x))
                 item = {
                     "Nama": nama_ol,
                     "Stok Olshopin": stok,
                     "Tren": arah,
-                    "Rata² Dipakai (+buffer)": round(avg_dipakai, 2),
-                    "Rata² Historis (flat)": round(flat, 2),
+                    "Rata² Dipakai (+buffer)": bulat(avg_dipakai),
+                    "Rata² Historis (flat)": bulat(flat),
                     "Proyeksi Habis (hari)": round(hh, 1) if hh is not None else None,
                 }
                 (baris if hh is not None else tanpa_histori).append(item)

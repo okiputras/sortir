@@ -9,6 +9,8 @@ Penjualan (owner). Halaman INI sendiri terbuka utk semua karyawan tanpa
 login, sama seperti Input Sortir -- isinya cuma rekomendasi jumlah
 siap-siap, bukan data finansial.
 """
+import math
+
 import pandas as pd
 import streamlit as st
 
@@ -86,12 +88,16 @@ for row in produk_rows:
     tren_siang = vs[2] if vs else 0.0
     pagi_dipakai = tren_pagi * (1 + buffer_pct / 100)
     siang_dipakai = tren_siang * (1 + buffer_pct / 100)
+    # Kg-an tetap desimal (rata-rata kg per hari wajar berupa pecahan). Satuan
+    # (dihitung per pcs/ikat, tidak bisa "3.6 ikat") dibulatkan ke ATAS -- lebih
+    # baik siap kelebihan dikit drpd kurang siap.
+    bulat = (lambda x: round(x, 1)) if is_kg else (lambda x: math.ceil(x))
     baris_jadwal.append({
         "Produk": nama,
         "Satuan": satuan,
-        "Siapkan jam 4 pagi": round(pagi_dipakai, 1),
-        "Tambah jam 12 siang": round(siang_dipakai, 1),
-        "Total/hari": round(pagi_dipakai + siang_dipakai, 1),
+        "Siapkan jam 4 pagi": bulat(pagi_dipakai),
+        "Tambah jam 12 siang": bulat(siang_dipakai),
+        "Total/hari": bulat(pagi_dipakai + siang_dipakai),
         "_is_kg": is_kg,  # internal -- cuma dipakai buat urutan, dibuang sblm tampil
     })
 
