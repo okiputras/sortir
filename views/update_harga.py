@@ -300,6 +300,7 @@ else:
                 item = {
                     "Nama": nama_ol,
                     "Stok Olshopin": stok,
+                    "Harga": harga_jual,
                     "Tren": arah,
                     "Rata² Dipakai (+buffer)": bulat(avg_dipakai),
                     "Rata² Historis (flat)": bulat(flat),
