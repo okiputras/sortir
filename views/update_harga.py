@@ -232,7 +232,7 @@ else:
     cabang_pilih = c3.selectbox("Cabang", cabang_list, key="proyeksi_cabang")
     hari_target = c4.number_input(
         "Order kalau stok bakal habis dalam berapa hari?",
-        min_value=1, max_value=90, value=5, step=1, key="proyeksi_hari",
+        min_value=1, max_value=90, value=10, step=1, key="proyeksi_hari",
     )
 
     tid = S.CABANG_TID.get(cabang_pilih)
