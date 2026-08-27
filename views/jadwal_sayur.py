@@ -140,5 +140,29 @@ else:
         + (f" ({len(bulan_dikecualikan)} bulan dikecualikan)" if bulan_dikecualikan else "")
         + f". Sudah + buffer {buffer_pct_kg}% (kg-an) / {buffer_pct_satuan}% (satuan)."
     )
-    df_jadwal = pd.DataFrame(baris_jadwal).drop(columns=["_is_kg"])
-    st.dataframe(df_jadwal, use_container_width=True, hide_index=True, height=420)
+
+    # Prioritas = 5 produk paling laris (Total/hari) di tiap kelompok satuan/kg-an --
+    # ini yg paling "mahal" kalau salah siap (dampak stockout/sortir paling besar),
+    # jadi disorot biar staff cek ini dulu sblm sisanya.
+    N_PRIORITAS = 5
+    df_jadwal = pd.DataFrame(baris_jadwal)
+    df_jadwal["Prioritas"] = ""
+    for _, grp in df_jadwal.groupby("_is_kg"):
+        top_idx = grp.nlargest(N_PRIORITAS, "Total/hari").index
+        df_jadwal.loc[top_idx, "Prioritas"] = "🔥 Prioritas"
+    df_jadwal = df_jadwal.drop(columns=["_is_kg"])
+    df_jadwal = df_jadwal[["Produk", "Prioritas", "Satuan", "Siapkan jam 4 pagi",
+                            "Tambah jam 12 siang", "Total/hari"]]
+    st.caption(f"🔥 **Prioritas** = {N_PRIORITAS} produk paling laris per kelompok (satuan/kg-an) -- cek & siapkan ini dulu.")
+
+    def _highlight_prioritas(row):
+        if row["Prioritas"]:
+            return ["background-color: #FDE7B0; color: #6B3F00; font-weight: 700;"] * len(row)
+        return [""] * len(row)
+
+    def _fmt_qty(x):
+        return f"{int(x)}" if float(x).is_integer() else f"{x:.1f}"
+
+    kolom_qty = ["Siapkan jam 4 pagi", "Tambah jam 12 siang", "Total/hari"]
+    styled = df_jadwal.style.apply(_highlight_prioritas, axis=1).format(_fmt_qty, subset=kolom_qty)
+    st.dataframe(styled, use_container_width=True, hide_index=True, height=420)
