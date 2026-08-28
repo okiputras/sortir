@@ -115,7 +115,18 @@ class _CdpTab:
 _SCROLL_JS = "window.scrollTo(0, document.body.scrollHeight); document.body.scrollHeight"
 
 
-def search_tokopedia(query: str, n: int = 20, wait_seconds: float = 5.5, retries: int = 2) -> list[dict]:
+# Kode `ob` (order-by) dropdown "Urutkan" di halaman pencarian Tokopedia --
+# ditemukan dgn cara klik dropdown-nya beneran di browser & baca URL hasilnya
+# (gak didokumentasikan resmi di manapun). ob=5 = "Ulasan" (urut byk ulasan/
+# review dulu) -- dipakai default krn produk yg BANYAK diulas biasanya juga
+# yg beneran laku & kepercayaan pembeli tinggi (high-value), bukan sekadar
+# nyangkut di kata kunci pencarian kayak default "Paling Sesuai".
+OB_ULASAN = 5
+
+
+def search_tokopedia(
+    query: str, n: int = 20, wait_seconds: float = 5.5, retries: int = 2, urutkan_ulasan: bool = True,
+) -> list[dict]:
     """Cari `query` di Tokopedia, kembalikan sampai `n` produk sbg list dict:
     {nama, harga, harga_asli, diskon_persen, rating, terjual, toko, lokasi, gambar, raw}.
 
@@ -128,7 +139,10 @@ def search_tokopedia(query: str, n: int = 20, wait_seconds: float = 5.5, retries
     scroll, cuma kartu yg muat di viewport awal yg beneran ke-render ke DOM
     (~15 produk), sisanya gak ada di HTML sama sekali walau `n` diminta lebih
     besar. Makanya sblm ekstraksi kita scroll ke bawah berkali-kali (jumlah
-    scroll disesuaikan sama `n`) biar makin banyak kartu ke-trigger render."""
+    scroll disesuaikan sama `n`) biar makin banyak kartu ke-trigger render.
+
+    `urutkan_ulasan=True` (default) nambah `&ob=5` ke URL pencarian biar hasil
+    diurutkan by jumlah ulasan -- lihat OB_ULASAN di atas."""
     n_scroll = min(10, max(1, (n - 1) // 10))
     for attempt in range(retries + 1):
         tab = _CdpTab()
@@ -136,6 +150,8 @@ def search_tokopedia(query: str, n: int = 20, wait_seconds: float = 5.5, retries
             tab.send("Page.enable")
             tab.ws.recv()
             url = f"https://www.tokopedia.com/search?st=product&q={requests.utils.quote(query)}"
+            if urutkan_ulasan:
+                url += f"&ob={OB_ULASAN}"
             nav_id = tab.send("Page.navigate", {"url": url})
             tab.recv_until(nav_id)
             time.sleep(wait_seconds)
