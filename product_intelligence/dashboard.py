@@ -109,11 +109,14 @@ if kategori_filter:
 tampil = tampil.head(top_n)
 
 st.subheader(f"📋 {len(tampil)} Produk Direkomendasikan")
-kolom_tampil = ["prioritas", "nama", "brand", "kategori", "harga", "terjual", "rating", "total", "toko", "lokasi", "alasan"]
+kolom_tampil = ["gambar", "prioritas", "nama", "brand", "kategori", "harga", "terjual", "rating", "total", "toko", "lokasi", "alasan"]
 kolom_ada = [k for k in kolom_tampil if k in tampil.columns]
 st.dataframe(
     tampil[kolom_ada].rename(columns={"total": "score", "nama": "produk"}),
     use_container_width=True, hide_index=True, height=500,
+    column_config={
+        "gambar": st.column_config.ImageColumn("Gambar", width="small"),
+    },
 )
 
 st.divider()

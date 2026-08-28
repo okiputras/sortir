@@ -58,7 +58,9 @@ _EXTRACT_JS = """
     if (!text || seen.has(text)) return;
     if (text.split('\\n').length < 3) return;
     seen.add(text);
-    out.push(text);
+    var img = a.querySelector('img');
+    var gambar = img ? (img.currentSrc || img.src || img.getAttribute('data-src') || '') : '';
+    out.push({text: text, gambar: gambar});
   });
   return JSON.stringify(out.slice(0, %d));
 })()
@@ -112,7 +114,7 @@ class _CdpTab:
 
 def search_tokopedia(query: str, n: int = 20, wait_seconds: float = 5.5, retries: int = 2) -> list[dict]:
     """Cari `query` di Tokopedia, kembalikan sampai `n` produk sbg list dict:
-    {nama, harga, harga_asli, diskon_persen, rating, terjual, toko, lokasi, raw}.
+    {nama, harga, harga_asli, diskon_persen, rating, terjual, toko, lokasi, gambar, raw}.
 
     Diamati: query yg PERSIS sama kadang balik "produk nggak ditemukan" kalau
     ditembak berturut-turut cepat (kemungkinan rate-limit halus di sisi
@@ -143,7 +145,7 @@ def search_tokopedia(query: str, n: int = 20, wait_seconds: float = 5.5, retries
 _PROMO_PREFIXES = ("Hemat ", "Bisa COD", "+", "PreOrder")
 
 
-def _parse_card(text: str) -> dict:
+def _parse_card(card: dict) -> dict:
     """Kartu produk Tokopedia render sbg baris innerText berurutan, tapi
     JUMLAH barisnya beda-beda (gak semua produk punya badge diskon/promo/
     lokasi toko) -- jadi tiap baris diklasifikasi by POLA-nya (bukan by
@@ -151,11 +153,14 @@ def _parse_card(text: str) -> dict:
     nama produk (baris pertama nya) atau toko+lokasi (baris SISA di akhir,
     urutan asli: toko dulu baru lokasi, kalau cuma sisa 1 baris berarti
     toko tanpa lokasi -- kejadian utk toko resmi brand mis. "Unilever
-    Food Solutions")."""
+    Food Solutions"). `gambar` diambil terpisah di JS (src <img> di dalam
+    kartu), bukan dari innerText -- gak ikut proses klasifikasi baris."""
+    text = card["text"]
     lines = [l.strip() for l in text.split("\n") if l.strip()]
     out = {
         "nama": None, "harga": None, "harga_asli": None, "diskon_persen": None,
-        "rating": None, "terjual": None, "toko": None, "lokasi": None, "raw": text,
+        "rating": None, "terjual": None, "toko": None, "lokasi": None,
+        "gambar": card.get("gambar") or None, "raw": text,
     }
     harga_lines = []
     sisa = []
