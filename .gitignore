@@ -6,3 +6,4 @@ service_account.json
 .streamlit/secrets.toml
 spreadsheet_id.txt
 *.xls
+product_intelligence/hasil/
