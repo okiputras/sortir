@@ -112,6 +112,9 @@ class _CdpTab:
         self.ws.close()
 
 
+_SCROLL_JS = "window.scrollTo(0, document.body.scrollHeight); document.body.scrollHeight"
+
+
 def search_tokopedia(query: str, n: int = 20, wait_seconds: float = 5.5, retries: int = 2) -> list[dict]:
     """Cari `query` di Tokopedia, kembalikan sampai `n` produk sbg list dict:
     {nama, harga, harga_asli, diskon_persen, rating, terjual, toko, lokasi, gambar, raw}.
@@ -119,7 +122,14 @@ def search_tokopedia(query: str, n: int = 20, wait_seconds: float = 5.5, retries
     Diamati: query yg PERSIS sama kadang balik "produk nggak ditemukan" kalau
     ditembak berturut-turut cepat (kemungkinan rate-limit halus di sisi
     Tokopedia, bukan blokir keras/CAPTCHA -- gak ada pola pasti). Makanya
-    ada retry otomatis dgn jeda sblm nyerah beneran."""
+    ada retry otomatis dgn jeda sblm nyerah beneran.
+
+    Grid produk Tokopedia di-lazy-load pas discroll (virtualized) -- tanpa
+    scroll, cuma kartu yg muat di viewport awal yg beneran ke-render ke DOM
+    (~15 produk), sisanya gak ada di HTML sama sekali walau `n` diminta lebih
+    besar. Makanya sblm ekstraksi kita scroll ke bawah berkali-kali (jumlah
+    scroll disesuaikan sama `n`) biar makin banyak kartu ke-trigger render."""
+    n_scroll = min(10, max(1, (n - 1) // 10))
     for attempt in range(retries + 1):
         tab = _CdpTab()
         try:
@@ -129,6 +139,11 @@ def search_tokopedia(query: str, n: int = 20, wait_seconds: float = 5.5, retries
             nav_id = tab.send("Page.navigate", {"url": url})
             tab.recv_until(nav_id)
             time.sleep(wait_seconds)
+
+            for _ in range(n_scroll):
+                scroll_id = tab.send("Runtime.evaluate", {"expression": _SCROLL_JS})
+                tab.recv_until(scroll_id)
+                time.sleep(1.3)
 
             ev_id = tab.send("Runtime.evaluate", {"expression": _EXTRACT_JS % n, "returnByValue": True})
             r = tab.recv_until(ev_id)
