@@ -48,13 +48,20 @@ KATEGORI_COCOK = {
     },
     "rumah-tangga": {
         "nama": "Rumah Tangga",
-        "alasan": "Kebutuhan harian yg lazim dijual minimarket/toko sembako (deterjen, sabun cuci).",
+        "alasan": (
+            "KOREKSI 2026-08-28 stlh cek level-3: subkategori Kebersihan & Laundry di sini "
+            "TERNYATA isinya mayoritas ALAT (ember, sapu, sikat, jemuran, setrika, gantungan "
+            "baju), bukan consumable. Consumable kebersihan rumah yg beneran dicari toko "
+            "(deterjen, sabun cuci piring, pembersih lantai, karbol, pewangi pakaian) TERNYATA "
+            "ada di kategori Kesehatan > Perlengkapan Kebersihan, BUKAN di sini -- lihat entry "
+            "'kesehatan' di bawah & KATEGORI_QUERIES di discovery.py yg sudah dikoreksi."
+        ),
         "subkategori": {
-            "kebersihan": "Kebersihan",
-            "laundry": "Laundry",
-            "kebutuhan-rumah": "Kebutuhan Rumah",
+            "kebutuhan-rumah": "Kebutuhan Rumah (baterai relevan, sisanya alat/appliance)",
         },
         "subkategori_dikecualikan": {
+            "kebersihan": "level-3: alat pel/ember/sapu/sikat/tempat sampah -- alat, bukan consumable",
+            "laundry": "level-3: jemuran/setrika/gantungan/laundry bag -- alat, bukan consumable (deterjen ada di Kesehatan > Perlengkapan Kebersihan)",
             "dekorasi": "furniture/dekor, bukan consumable",
             "furniture": "furniture, bukan consumable",
             "kamar-mandi": "perlengkapan/furnitur kamar mandi, bukan consumable",
@@ -108,14 +115,26 @@ KATEGORI_COCOK = {
     },
     "kesehatan": {
         "nama": "Kesehatan",
-        "alasan": "Obat OTC & vitamin umum sering jadi item impulse-buy di toko sembako.",
+        "alasan": (
+            "Obat OTC & vitamin umum sering jadi item impulse-buy di toko sembako. "
+            "PENTING: Perlengkapan Kebersihan di sini adalah kategori resmi Tokopedia utk "
+            "deterjen/sabun cuci piring/pembersih lantai/karbol/pewangi pakaian/tisu -- BUKAN "
+            "di bawah Rumah Tangga spt asumsi awal (lihat catatan di entry 'rumah-tangga')."
+        ),
         "subkategori": {
-            "obat-obatan": "Obat - Obatan",
+            "obat-obatan": "Obat - Obatan (cuma jenis OTC umum -- lihat exclude di bawah)",
             "vitamin-suplemen": "Vitamin & Suplemen",
             "masker-medis-pelindung-wajah": "Masker Medis & Pelindung Wajah",
-            "perlengkapan-kebersihan": "Perlengkapan Kebersihan",
+            "perlengkapan-kebersihan": "Perlengkapan Kebersihan (deterjen, sabun cuci piring, pembersih lantai, karbol, pewangi pakaian, tisu, dll -- 52 subkategori level-3)",
         },
         "subkategori_dikecualikan": {
+            "obat-obatan__level3-prescription": (
+                "37 dari 43 level-3 di 'obat-obatan' berawalan 'prescription-' atau utk "
+                "penyakit kronis (kanker, jantung, diabetes, hipertensi) -- resep dokter, "
+                "gak bisa dijual bebas di toko. Sisa 6 yg OTC & relevan: obat-sakit-kepala-"
+                "demam, obat-batuk-pilek, obat-mual-pencernaan, obat-alergi, obat-anti-nyeri, "
+                "obat-herbal (lihat KATEGORI_QUERIES['obat warung'] di discovery.py)."
+            ),
             "essential-oil": "niche",
             "kesehatan-wanita": "niche/medis, volume rendah",
             "perlengkapan-medis": "peralatan medis, di luar segmen",

@@ -3,17 +3,28 @@ Daftar kategori & search query terkurasi manual (BUKAN di-generate AI/LLM
 tiap run -- lihat catatan di product_intelligence/__init__.py kenapa).
 Edit KATEGORI_QUERIES langsung buat nambah/ubah cakupan riset.
 
-Query dipilih dari pengalaman riset manual sebelumnya: kata "grosir" doang
-gampang ke-match penjual TAS/kemasan (bukan bahan pokok), jadi tiap query
-sengaja gabungin nama produk/brand spesifik + "grosir" di beberapa,
-pencarian umum kategori di yang lain -- baca komentar tiap kategori.
+Query di bawah dibangun dari nama SUBKATEGORI LEVEL-3 resmi Tokopedia
+(dicek 2026-08-28 dgn buka tiap halaman /p/<kategori>/<subkategori> beneran
+& baca daftar sub-subkategorinya -- bukan tebakan lagi kayak versi
+sebelumnya). Ini penting krn taksonomi Tokopedia kadang gak intuitif:
+mis. deterjen/sabun cuci piring/pembersih lantai itu SEMUA di bawah
+Kesehatan > Perlengkapan Kebersihan, BUKAN Rumah Tangga > Laundry (yg
+isinya cuma alat -- jemuran, setrika, gantungan baju). Versi lama sempat
+nembak "deterjen bubuk grosir" ke kategori yg salah krn asumsi struktur
+kategorinya keliru.
 
-Kategori/grouping di bawah DITARIK dari tokopedia_kategori_airin.py
-(KATEGORI_COCOK -- hasil scrape+kurasi struktur kategori resmi Tokopedia yg
-cocok buat toko sembako/grosir spt Airin), TAPI sengaja BUANG Sayur/Buah/
-Daging dari sana -- produk segar itu disuplai lokal harian (lihat
-views/jadwal_sayur.py), bukan barang yg "ditemukan" & di-restock dari
-marketplace kayak barang kemasan di bawah ini.
+Query di sini pakai istilah kategori asli (kadang tanpa embel2 "grosir")
+krn nama kategori resmi sendiri sudah cukup spesifik buat nge-match
+listing yg tepat -- "grosir" ditambah HANYA di komoditas yg emang lazim
+dibeli bulk (beras, minyak, madu, dst), bukan dipaksa di semua query kayak
+sebelumnya.
+
+Kategori/grouping DITARIK dari tokopedia_kategori_airin.py (KATEGORI_COCOK),
+TAPI sengaja BUANG Sayur/Buah/Daging -- produk segar disuplai lokal harian
+(lihat views/jadwal_sayur.py), bukan barang yg "ditemukan" dari marketplace.
+Juga BUANG subkategori yg ternyata isinya alat/equipment bukan consumable
+pas dicek level-3-nya (mis. Rumah Tangga > Laundry & > Kebersihan isinya
+mayoritas alat -- ember, sapu, jemuran, setrika -- bukan barang abis pakai).
 """
 from typing import Optional
 
@@ -22,47 +33,62 @@ import pandas as pd
 from tokopedia_search import _launch_chrome, search_tokopedia
 
 KATEGORI_QUERIES = {
-    # -- Makanan & Minuman (kemasan/kering, BUKAN sayur/buah/daging segar) --
-    "madu": ["madu grosir", "madu murni 1kg"],
-    "kurma": ["kurma date crown", "kurma grosir 1kg"],
-    "bumbu & bahan masakan": ["knorr bumbu grosir", "royco bumbu grosir", "totole bumbu"],
-    "abon": ["abon sapi grosir", "abon ayam crunchy"],
-    "makanan kering": ["kacang kering grosir", "kismis grosir", "granola grosir"],
-    "kopi": ["kopi sachet grosir", "kopi kapal api grosir"],
-    "mie & pasta": ["mie sedaap grosir", "pop mie grosir", "pasta spaghetti grosir"],
-    "minuman kemasan": ["teh kotak grosir", "sirup marjan grosir"],
-    "makanan ringan": ["snack kiloan grosir", "keripik kentang grosir"],
-    "makanan sarapan": ["sereal sarapan grosir", "oatmeal quaker grosir"],
-    "beras & shirataki": ["beras premium 5kg grosir", "beras shirataki grosir"],
-    "bahan kue": ["tepung terigu grosir", "ragi fermipan grosir"],
+    # -- Makanan & Minuman > Bumbu & Bahan Masakan --
+    "bumbu masak instan": ["bumbu masak instan", "kaldu penyedap rasa"],
+    "sambal & saus": ["aneka sambal", "saus dressing"],
+    "minyak & santan": ["minyak goreng", "santan kelapa"],
+    "kecap & terasi": ["kecap manis", "terasi"],
 
-    # -- Rumah Tangga --
-    "kebersihan rumah": ["sabun cuci piring grosir", "pewangi pakaian grosir"],
-    "laundry": ["deterjen bubuk grosir", "pelicin pakaian grosir"],
-    "kebutuhan rumah": ["kantong plastik grosir", "tisu grosir"],
+    # -- Makanan & Minuman > lainnya --
+    "beras": ["beras putih 5kg grosir", "beras merah"],
+    "abon & kerupuk": ["abon sapi", "kerupuk"],
+    "kacang & biji-bijian": ["kacang kering", "biji-bijian"],
+    "mie instan": ["mie instan", "mie telur"],
+    "pasta & bihun": ["aneka pasta", "bihun soun"],
+    "biskuit & cokelat": ["biskuit wafer", "cokelat batang"],
+    "keripik & camilan": ["keripik", "kacang camilan"],
+    "sereal & oat": ["sereal sarapan", "oat"],
+    "roti & selai": ["roti tawar", "selai"],
+    "kopi": ["kopi kemasan", "kopi bubuk"],
+    "teh & sirup": ["teh celup", "sirup"],
+    "susu kental manis": ["susu kental manis"],
+    "madu": ["madu murni", "madu grosir"],
+    "kurma": ["kurma date crown", "kurma grosir 1kg"],
+    "air mineral": ["air mineral galon", "air mineral botol"],
+    "bahan kue": ["baking powder", "ragi instan", "coklat bubuk masak"],
+
+    # -- Kesehatan > Perlengkapan Kebersihan (taksonomi asli utk consumable
+    # kebersihan rumah -- BUKAN Rumah Tangga > Laundry/Kebersihan yg isinya
+    # alat) --
+    "deterjen": ["deterjen bubuk", "deterjen cair"],
+    "sabun cuci piring": ["sabun cuci piring"],
+    "pembersih lantai & karbol": ["pembersih lantai", "karbol"],
+    "pewangi pakaian": ["pewangi pelembut pakaian"],
+    "pengharum ruangan": ["pengharum ruangan"],
+    "tisu": ["tissue", "tisu basah"],
+    "anti nyamuk & serangga": ["pest control rumah", "obat nyamuk"],
 
     # -- Perawatan Tubuh --
-    "perlengkapan mandi": ["sabun mandi grosir", "shampoo sachet grosir"],
-    "perawatan rambut": ["shampoo grosir", "minyak rambut grosir"],
-    "kesehatan gigi & mulut": ["pasta gigi grosir", "sikat gigi grosir"],
-    "produk kewanitaan": ["pembalut grosir", "pantyliner grosir"],
-    "grooming": ["pisau cukur grosir", "silet cukur grosir"],
+    "sabun mandi": ["sabun mandi batang", "sabun mandi cair"],
+    "shampoo & conditioner": ["shampoo sachet", "conditioner rambut"],
+    "pasta gigi & sikat gigi": ["pasta gigi", "sikat gigi"],
+    "pembalut wanita": ["pembalut wanita"],
+    "alat cukur": ["alat cukur pria", "krim cukur"],
 
     # -- Ibu & Bayi --
-    "popok": ["popok bayi grosir", "pampers grosir"],
-    "aksesori popok": ["tisu basah bayi grosir", "kapas bayi grosir"],
-    "susu bayi & anak": ["susu formula grosir", "susu kental manis grosir"],
-    "makanan bayi": ["bubur bayi grosir", "biskuit bayi grosir"],
+    "popok bayi": ["popok sekali pakai", "pampers"],
+    "susu formula": ["susu formula bayi", "susu pertumbuhan anak"],
+    "makanan bayi": ["bubur bayi instan", "biskuit bayi"],
 
-    # -- Kesehatan --
-    "obat-obatan": ["obat warung grosir", "paracetamol grosir"],
-    "vitamin & suplemen": ["vitamin c grosir", "multivitamin grosir"],
-    "masker medis": ["masker medis grosir", "masker kesehatan grosir"],
-    "perlengkapan kebersihan": ["hand sanitizer grosir", "tisu antiseptik grosir"],
+    # -- Kesehatan > Obat-Obatan (cuma jenis OTC yg lazim dijual toko,
+    # BUKAN kategori resep/penyakit kronis -- lihat komentar exclude di
+    # tokopedia_kategori_airin.py) --
+    "obat warung": ["obat sakit kepala demam", "obat batuk pilek", "obat mual pencernaan"],
+    "vitamin & suplemen": ["multivitamin", "vitamin c", "vitamin d"],
+    "masker medis": ["masker medis"],
 
-    # -- Dapur (cuma consumable, bukan alat masak -- lihat KATEGORI_COCOK) --
-    "kemasan makanan": ["plastik wrap grosir", "kantong kresek grosir"],
-    "penyimpanan makanan": ["plastik ziplock grosir", "wadah makanan sekali pakai grosir"],
+    # -- Dapur > Penyimpanan Makanan (consumable aja, alat/wadah dibuang) --
+    "plastik & aluminium foil": ["plastic wrap", "aluminium foil", "plastik klip"],
 }
 
 
