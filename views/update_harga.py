@@ -297,9 +297,16 @@ else:
                 # Satuan (per pcs, tidak bisa "3.6 pcs") dibulatkan ke ATAS -- lebih
                 # baik siap kelebihan dikit drpd kurang siap, sama spt Jadwal Sayur.
                 bulat = (lambda x: round(x, 2)) if is_kg_item else (lambda x: math.ceil(x))
+                # Rekomendasi order = biar stok cukup sampai `hari_target` hari ke depan
+                # (target reorder yg sama persis dgn ambang "segera order" di bawah),
+                # bukan cuma "berapa yg kurang sekarang" -- jadi begitu di-order, stoknya
+                # gak langsung nyentuh ambang urgent lagi besok-besoknya.
+                target_stok = avg_dipakai * hari_target
+                rekomendasi_order = bulat(max(0.0, target_stok - stok))
                 item = {
                     "Nama": nama_ol,
                     "Stok Olshopin": stok,
+                    "Rekomendasi Order": rekomendasi_order,
                     "Harga": harga_jual,
                     "Tren": arah,
                     "Rata² Dipakai (+buffer)": bulat(avg_dipakai),
@@ -316,18 +323,57 @@ else:
                 + f"). Rata-rata dipakai sudah + buffer {buffer_pct_kg}% (kg-an) / {buffer_pct_satuan}% (satuan)."
             )
 
+            def _fmt_angka(x):
+                if x is None or (isinstance(x, float) and pd.isna(x)):
+                    return "-"
+                return f"{int(x)}" if float(x).is_integer() else f"{x:.2f}"
+
+            kolom_angka = ["Stok Olshopin", "Rekomendasi Order", "Rata² Dipakai (+buffer)", "Rata² Historis (flat)"]
+
+            # 3 zona warna by seberapa dekat ke hari_target -- proporsional ke
+            # hari_target-nya sendiri (bukan angka hari tetap), krn ambangnya
+            # bisa diubah user 1-90 hari lewat input di atas.
+            def _highlight_urgensi(row):
+                hh = row["Proyeksi Habis (hari)"]
+                if hh is None or pd.isna(hh):
+                    return [""] * len(row)
+                if hh <= hari_target * 0.3:
+                    return ["background-color: #FFCDD2; color: #B71C1C; font-weight: 700;"] * len(row)
+                if hh <= hari_target * 0.7:
+                    return ["background-color: #FFE0B2; color: #8B4A00; font-weight: 600;"] * len(row)
+                return ["background-color: #FFF9C4; color: #5C4A00;"] * len(row)
+
             urgent = sorted((b for b in baris if b["Proyeksi Habis (hari)"] <= hari_target),
                              key=lambda b: b["Proyeksi Habis (hari)"])
             st.subheader(f"\U0001F534 Segera order — proyeksi habis ≤ {hari_target} hari ({len(urgent)} produk)")
             if urgent:
-                st.dataframe(pd.DataFrame(urgent), use_container_width=True, hide_index=True)
+                st.caption(
+                    "🔴 sangat mendesak · 🟠 mendesak · 🟡 mulai dekat ambang -- "
+                    "kolom **Rekomendasi Order** = jumlah yg bikin stok cukup sampai "
+                    f"{hari_target} hari ke depan (bukan cuma nutup kekurangan hari ini)."
+                )
+                df_urgent = pd.DataFrame(urgent)
+                styled_urgent = (
+                    df_urgent.style
+                    .apply(_highlight_urgensi, axis=1)
+                    .set_properties(subset=["Rekomendasi Order"], **{"font-weight": "800", "font-size": "1.05em"})
+                    .format(_fmt_angka, subset=kolom_angka)
+                )
+                st.dataframe(styled_urgent, use_container_width=True, hide_index=True)
             else:
                 st.success("Tidak ada produk yang diproyeksikan habis dalam rentang ini.")
 
             aman = sorted((b for b in baris if b["Proyeksi Habis (hari)"] > hari_target),
                           key=lambda b: b["Proyeksi Habis (hari)"])
-            with st.expander(f"Aman — proyeksi habis > {hari_target} hari ({len(aman)} produk)"):
-                st.dataframe(pd.DataFrame(aman), use_container_width=True, hide_index=True)
+            with st.expander(f"🟢 Aman — proyeksi habis > {hari_target} hari ({len(aman)} produk)"):
+                if aman:
+                    df_aman = pd.DataFrame(aman)
+                    styled_aman = (
+                        df_aman.style
+                        .apply(lambda row: ["background-color: #E8F5E9; color: #1B5E20;"] * len(row), axis=1)
+                        .format(_fmt_angka, subset=kolom_angka)
+                    )
+                    st.dataframe(styled_aman, use_container_width=True, hide_index=True)
 
             if tanpa_histori:
                 with st.expander(
