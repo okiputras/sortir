@@ -156,8 +156,14 @@ if c1.button("🔄 Tarik katalog Olshopin", type="primary"):
         st.session_state.olshop_catalog = _catalog()
 if c2.button("🧹 Bersihkan cache"):
     _catalog.clear()
+    # _catalog_for (dipakai Proyeksi Stok Habis per-cabang, di bawah) py cache
+    # TERPISAH dgn TTL 6 jam sendiri -- kalau gak ikut dibersihkan di sini,
+    # tombol ini kesannya "beres" padahal Proyeksi Stok masih nunjukin stok
+    # BASI sampai 6 jam kemudian (pernah kejadian: produk yg baru abis stoknya
+    # gak nongol di "Segera order" krn masih baca stok lama dari cache).
+    _catalog_for.clear()
     st.session_state.pop("olshop_catalog", None)
-    st.info("Cache katalog dibersihkan. Klik 'Tarik katalog' untuk ambil ulang.")
+    st.info("Cache katalog dibersihkan (termasuk Proyeksi Stok Habis). Klik 'Tarik katalog' untuk ambil ulang.")
 
 catalog = st.session_state.get("olshop_catalog")
 
@@ -278,7 +284,12 @@ else:
 
             with st.spinner(f"Menarik katalog Olshopin {cabang_pilih}…"):
                 catalog_cabang = _catalog_for(tid)
-            st.caption(f"Katalog Olshopin {cabang_pilih}: {len(catalog_cabang):,} produk.".replace(",", "."))
+            st.caption(
+                f"Katalog Olshopin {cabang_pilih}: {len(catalog_cabang):,} produk. "
+                "Di-cache 6 jam -- kalau ada produk yg stoknya baru saja berubah di Olshopin "
+                "tapi belum kelihatan di sini, klik **🧹 Bersihkan cache** di bagian atas halaman."
+                .replace(",", ".")
+            )
 
             trend_map = SH.trend_avg_qty(  # {nama_norm: (nama_asli, flat, tren, slope)}
                 cabang_pilih, months=n_bulan, exclude_bulan=bulan_dikecualikan,
