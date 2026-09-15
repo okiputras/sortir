@@ -26,15 +26,20 @@ import sales_history as SH
 from sales_upload import parse_transaksi
 
 # Default buffer per cabang & tipe -- hasil backtest walk-forward (bandingkan
-# proyeksi vs actual bulan berjalan, Apr-Jul 2026), cari titik "siku": buffer
-# terkecil yang masih naikkan akurasi banyak sebelum kelebihan stok melonjak
-# gak sepadan. Kg butuh buffer lebih besar drpd satuan krn satuan sudah dapat
-# "napas" gratis dari pembulatan ke atas. PIRANHA butuh lebih besar drpd
-# SULFAT krn penjualannya lagi tren naik (lebih volatil). Sama persis dgn yg
-# dipakai di Jadwal Sayur -- rumusnya (trend_avg_qty) sama.
+# proyeksi vs actual bulan berjalan; terakhir di-derive ulang Sep 2026 dgn fold
+# Jun/Jul/Agu 2026), cari titik "siku": buffer terkecil yang masih naikkan
+# akurasi banyak sebelum kelebihan stok melonjak gak sepadan. Kg butuh buffer
+# lebih besar drpd satuan krn satuan sudah dapat "napas" gratis dari pembulatan
+# ke atas. PIRANHA butuh lebih besar drpd SULFAT krn penjualannya lagi tren naik
+# (lebih volatil). Sama persis dgn yg dipakai di Jadwal Sayur -- rumusnya
+# (trend_avg_qty) sama, jadi kalau salah satu diubah yang lain ikut diubah.
+#
+# PIRANHA/kg naik 50->55 (Sep 2026): siku-nya geser di data terbaru -- 50->55%
+# nambah service level 72.2->78.1% cuma dgn kelebihan stok +3.9pp, sesudah itu
+# datar (55->60% nambah 0.0pp service tapi +4pp kelebihan).
 DEFAULT_BUFFER = {
     ("SULFAT", "kg"): 40, ("SULFAT", "satuan"): 20,
-    ("PIRANHA", "kg"): 50, ("PIRANHA", "satuan"): 20,
+    ("PIRANHA", "kg"): 55, ("PIRANHA", "satuan"): 20,
 }
 FALLBACK_BUFFER = 10
 

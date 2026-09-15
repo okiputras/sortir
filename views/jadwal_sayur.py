@@ -19,18 +19,23 @@ import olshopin_sync as S
 import sales_history as SH
 
 # Default buffer per cabang & tipe -- hasil backtest walk-forward (bandingkan
-# proyeksi vs actual bulan berjalan, Apr-Jul 2026 dari data-sulfat/data-piranha)
-# nyari titik "siku": buffer terkecil yang masih naikkan service level banyak
-# sebelum kelebihan stok mulai melonjak gak sepadan. Kg butuh buffer lebih
-# besar drpd satuan krn satuan sudah dapat "napas" gratis dari pembulatan ke
-# atas (lihat bulat() di bawah) -- kg tetap desimal presisi, jadi lebih rawan
-# kurang kalau bufferny kekecilan. PIRANHA butuh lebih besar drpd SULFAT krn
-# penjualannya lagi tren naik (lebih volatil, lebih sering "ketinggalan" dari
-# tren regresi konservatif). Cabang di luar 2 ini fallback ke 10% (aman, blm
-# ada data buat backtest).
+# proyeksi vs actual bulan berjalan; terakhir di-derive ulang Sep 2026 dgn fold
+# Jun/Jul/Agu 2026 dari data-sulfat/data-piranha) nyari titik "siku": buffer
+# terkecil yang masih naikkan service level banyak sebelum kelebihan stok mulai
+# melonjak gak sepadan. Kg butuh buffer lebih besar drpd satuan krn satuan sudah
+# dapat "napas" gratis dari pembulatan ke atas (lihat bulat() di bawah) -- kg
+# tetap desimal presisi, jadi lebih rawan kurang kalau buffernya kekecilan.
+# PIRANHA butuh lebih besar drpd SULFAT krn penjualannya lagi tren naik (lebih
+# volatil, lebih sering "ketinggalan" dari tren regresi konservatif). Cabang di
+# luar 2 ini fallback ke 10% (aman, blm ada data buat backtest).
+#
+# PIRANHA/kg naik 50->55 (Sep 2026): di data terbaru sikunya geser: 50->55%
+# nambah service level 72.2->78.1% cuma dgn kelebihan stok +3.9pp, sesudah itu
+# datar total (55->60% nambah 0.0pp service tapi +4pp kelebihan). 3 angka lain
+# dicek ulang dgn fold yang sama dan masih di sikunya masing-masing.
 DEFAULT_BUFFER = {
     ("SULFAT", "kg"): 40, ("SULFAT", "satuan"): 20,
-    ("PIRANHA", "kg"): 50, ("PIRANHA", "satuan"): 20,
+    ("PIRANHA", "kg"): 55, ("PIRANHA", "satuan"): 20,
 }
 FALLBACK_BUFFER = 10
 
