@@ -110,22 +110,25 @@ def main():
                     gagal += 1; continue
                 page.select_option("form[action*='/account/edit_barang/'] [name=kategori]", p["kategori"])
                 page.click(f"#submit_update{info['id']}", timeout=25_000)
-                # Kalau harga jual di bawah harga beli, halaman TIDAK mengirim
-                # form -- ia memunculkan modal peringatan #fixHarga, yang punya
-                # tombol lanjutnya sendiri. Kondisinya dibaca dari form dulu
-                # supaya modalnya hanya ditunggu saat memang akan muncul;
-                # menunggu di setiap produk akan menambah belasan menit.
+                # Halaman bisa menahan submit lewat modal peringatan (#fixHarga
+                # untuk harga jual di bawah beli, #notif_kode kalau kode barang
+                # berubah); masing-masing punya tombol lanjutnya sendiri.
                 #
-                # Jangan pakai page.is_visible() di sini: ia memeriksa saat itu
-                # juga tanpa menunggu, sedangkan modalnya perlu ~300 ms untuk
-                # tampil -- itu sebabnya versi sebelumnya tidak pernah mengklik
-                # tombolnya dan produk di bawah modal tetap gagal.
-                if info["jual"] < info["beli"]:
+                # Modalnya ditunggu TANPA SYARAT. Versi sebelumnya cuma menunggu
+                # saat harga jual < harga beli, dan itu meleset: UBI CILEMBU
+                # (beli 7.000, jual 9.000) tetap ditolak. Menebak kapan modal
+                # muncul ternyata tidak bisa diandalkan, jadi jangan ditebak.
+                #
+                # Juga jangan pakai page.is_visible(): ia memeriksa saat itu juga
+                # tanpa menunggu, sedangkan modalnya perlu ~300 ms untuk tampil --
+                # itu sebabnya versi sebelum itu tidak pernah mengklik tombolnya.
+                for tombol in ("#submit_harga", "#force_submit_code"):
                     try:
-                        page.wait_for_selector("#submit_harga", state="visible", timeout=8000)
-                        page.click("#submit_harga", timeout=5000)
+                        page.wait_for_selector(tombol, state="visible", timeout=1500)
+                        page.click(tombol, timeout=5000)
+                        break
                     except Exception:
-                        catat(f"[{i}] {p['nama'][:30]}: modal harga tidak bisa dilanjutkan")
+                        pass
                 page.wait_for_timeout(2200)
                 # Jangan percaya klik itu sendiri: form menolak submit (tanpa
                 # kirim POST sama sekali) kalau harga jual < harga beli, dan
