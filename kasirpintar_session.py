@@ -33,6 +33,10 @@ import sys
 
 STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kasirpintar_state.json")
 BASE = "https://kasirpintar.co.id"
+UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36")
+HAL_BARANG = f"{BASE}/account/import_edit_products_v2"
+API_BARANG = f"{BASE}/account/export_products_v2"
 
 
 def _playwright():
@@ -126,25 +130,23 @@ def _simpan_sesi(ctx):
 
 
 def cek():
-    """Tes apakah cookie sesinya masih dianggap login."""
+    """Tes apakah cookie sesinya masih dianggap login.
+
+    Harus menembak halaman yang BENAR-BENAR butuh login. Versi awal cuma
+    membuka beranda -- beranda tidak pernah redirect ke /login walau sesi
+    sudah mati, jadi hasilnya selalu "masih login" (laporan palsu)."""
     with _playwright()() as p:
         browser, ctx = _ctx(p)
         page = ctx.new_page()
-        page.goto(BASE, wait_until="domcontentloaded")
+        page.goto(HAL_BARANG, wait_until="domcontentloaded", timeout=60_000)
+        page.wait_for_timeout(2000)
         url = page.url
         masih = "/login" not in url
         if masih:
             _simpan_sesi(ctx)
-        print(("MASIH LOGIN" if masih else "SESI HABIS -- jalankan 'login' lagi") + f"  ({url})")
-        print(f"Judul halaman: {page.title()}")
+        print(("MASIH LOGIN" if masih else "SESI HABIS -- ambil cookie baru lalu 'impor'") + f"  ({url})")
         browser.close()
         return masih
-
-
-UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-      "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36")
-HAL_BARANG = f"{BASE}/account/import_edit_products_v2"
-API_BARANG = f"{BASE}/account/export_products_v2"
 
 
 def barang(keluar=None):
