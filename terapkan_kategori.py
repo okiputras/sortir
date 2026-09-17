@@ -21,7 +21,7 @@ import sys
 
 BASE = "https://kasirpintar.co.id"
 DIR = os.path.dirname(os.path.abspath(__file__))
-STATE = os.path.join(DIR, "kasirpintar_state.json")
+STATE = os.environ.get("KP_STATE") or os.path.join(DIR, "kasirpintar_state.json")
 RENCANA = os.environ.get("RENCANA") or os.path.join(DIR, "hasil_analisa", "rencana_kategori.json")
 LOG = os.path.join(DIR, "hasil_analisa", "log_kategori.txt")
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "

@@ -30,7 +30,8 @@ import argparse
 import os
 import sys
 
-STATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kasirpintar_state.json")
+STATE = os.environ.get("KP_STATE") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "kasirpintar_state.json")
 BASE = "https://kasirpintar.co.id"
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36")
