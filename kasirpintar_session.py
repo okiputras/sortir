@@ -11,12 +11,20 @@ sesi itu sampai kedaluwarsa (lalu tinggal `login` lagi).
 Password TIDAK disimpan di mana pun oleh script ini -- yang tersimpan cuma
 cookie sesi di kasirpintar_state.json (gitignored, chmod 600).
 
+CATATAN (Sep 2026): mode `login` di bawah TERNYATA GAGAL di kasirpintar.co.id
+-- Turnstile menolak browser bawaan Playwright (terdeteksi otomasi lewat
+navigator.webdriver/marionette) walaupun yang login manusia betulan. Jadi
+pakai mode `impor` : login di browser harian sendiri, lalu salin cookie
+sesinya ke sini. Sesi itu dibuat manusia lewat browser normal -- script cuma
+memakai ulang, bukan menembus apa-apa.
+
 Butuh: pip install playwright && python3 -m playwright install firefox
 
 Pakai:
-    python3 kasirpintar_session.py login      # buka browser, login sendiri
+    python3 kasirpintar_session.py impor      # tempel cookie dari browser sendiri
     python3 kasirpintar_session.py cek        # tes apakah sesi masih hidup
     python3 kasirpintar_session.py buka <url> # buka halaman apa pun pakai sesi itu
+    python3 kasirpintar_session.py login      # (biasanya gagal, lihat catatan di atas)
 """
 import json
 import os
@@ -54,6 +62,47 @@ def login():
         print(f"\nBerhasil. Sesi disimpan ke {STATE} (chmod 600).")
         print(f"Halaman sekarang: {page.url}")
         browser.close()
+
+
+def impor():
+    """Pakai sesi yang dibuat di browser HARIAN sendiri.
+
+    Langkahnya (sekali saja tiap sesi habis):
+      1. Login ke kasirpintar.co.id di Chrome/Firefox biasa seperti biasanya.
+      2. Buka DevTools (Cmd+Option+I) -> tab Application (Chrome) atau
+         Storage (Firefox) -> Cookies -> https://kasirpintar.co.id
+      3. Salin NAMA dan VALUE tiap cookie, tempel di sini satu per baris
+         dengan format  nama=value
+      4. Tekan Enter dua kali kalau sudah selesai.
+    """
+    print(impor.__doc__)
+    print("Tempel cookie (format: nama=value), Enter 2x kalau selesai:\n")
+    baris = []
+    kosong = 0
+    while kosong < 1:
+        try:
+            l = input().strip()
+        except EOFError:
+            break
+        if not l:
+            kosong += 1
+            continue
+        baris.append(l)
+    cookies = []
+    for l in baris:
+        if "=" not in l:
+            print(f"  dilewati (tak ada '='): {l[:40]}")
+            continue
+        nama, val = l.split("=", 1)
+        cookies.append({"name": nama.strip(), "value": val.strip(),
+                        "domain": ".kasirpintar.co.id", "path": "/"})
+    if not cookies:
+        sys.exit("Tidak ada cookie yang terbaca.")
+    with open(STATE, "w", encoding="utf-8") as f:
+        json.dump({"cookies": cookies, "origins": []}, f)
+    os.chmod(STATE, 0o600)
+    print(f"\n{len(cookies)} cookie disimpan ke {STATE} (chmod 600).")
+    print("Sekarang tes:  python3 kasirpintar_session.py cek")
 
 
 def _ctx(p, headless=True):
@@ -101,6 +150,8 @@ if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else ""
     if cmd == "login":
         login()
+    elif cmd == "impor":
+        impor()
     elif cmd == "cek":
         cek()
     elif cmd == "buka" and len(sys.argv) > 2:
