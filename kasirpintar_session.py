@@ -23,6 +23,7 @@ Butuh: pip install playwright && python3 -m playwright install firefox
 Pakai:
     python3 kasirpintar_session.py impor      # tempel cookie dari browser sendiri
     python3 kasirpintar_session.py cek        # tes apakah sesi masih hidup
+    python3 kasirpintar_session.py barang     # unduh DATA_BARANG*.xls (master produk)
     python3 kasirpintar_session.py buka <url> # buka halaman apa pun pakai sesi itu
     python3 kasirpintar_session.py login      # (biasanya gagal, lihat catatan di atas)
 """
@@ -126,6 +127,59 @@ def cek():
         return masih
 
 
+UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36")
+HAL_BARANG = f"{BASE}/account/import_edit_products_v2"
+API_BARANG = f"{BASE}/account/export_products_v2"
+
+
+def barang(keluar=None):
+    """Unduh master produk (DATA_BARANG*.xls) -- file yang sama persis dengan
+    tombol 'Export Barang' di halaman Export/Import Edit Produk.
+
+    Payload-nya disadap dari request asli halaman itu; dua field ini wajib
+    persis, kalau tidak server cuma balas "Error Data":
+      range_selected_product = "0~0"          (artinya semua baris)
+      choosen_order          = "kode_barang"
+    """
+    from datetime import datetime
+    with _playwright()() as p:
+        browser = p.firefox.launch(headless=True)
+        ctx = browser.new_context(storage_state=STATE, user_agent=UA, locale="id-ID")
+        page = ctx.new_page()
+        page.goto(HAL_BARANG, wait_until="domcontentloaded", timeout=60_000)
+        page.wait_for_timeout(3000)
+        if "/login" in page.url:
+            sys.exit("Sesi sudah habis -- ambil cookie baru lalu jalankan 'impor' lagi.")
+        tok = page.evaluate(
+            "document.querySelector('meta[name=csrf-token]')?.content"
+            " || document.querySelector('form input[name=_token]')?.value")
+        if not tok:
+            sys.exit("CSRF token tidak ketemu di halaman.")
+        payload = {"kategori": "[]", "range_selected_product": "0~0", "choosen_state": "all",
+                   "choosen_order": "kode_barang", "by_zero": "false",
+                   "export_type": "product", "data_stok": False}
+        r = ctx.request.post(API_BARANG, data=json.dumps(payload), headers={
+            "Content-Type": "application/json", "Accept": "application/json",
+            "X-Requested-With": "XMLHttpRequest", "X-CSRF-Token": tok, "Referer": HAL_BARANG})
+        body = r.body()
+        browser.close()
+
+    if body[:4] != b"\xd0\xcf\x11\xe0" and body[:2] != b"PK":
+        sys.exit(f"Bukan file Excel (status {r.status}): {body[:200].decode('utf-8', 'ignore')}")
+    nama = keluar or f"DATA_BARANG_{datetime.now():%Y-%m-%d_%H%M%S}.xls"
+    with open(nama, "wb") as f:
+        f.write(body)
+    print(f"Tersimpan: {nama}  ({len(body):,} byte)".replace(",", "."))
+    try:
+        import xlrd
+        sh = xlrd.open_workbook(nama, ignore_workbook_corruption=True).sheet_by_name("barang")
+        print(f"  sheet 'barang': {sh.nrows - 2} produk")
+    except Exception:
+        pass
+    return nama
+
+
 def buka(url, simpan=None):
     """Buka satu URL pakai sesi tersimpan, cetak teksnya (atau simpan HTML-nya)."""
     if not url.startswith("http"):
@@ -154,6 +208,8 @@ if __name__ == "__main__":
         impor()
     elif cmd == "cek":
         cek()
+    elif cmd == "barang":
+        barang(sys.argv[2] if len(sys.argv) > 2 else None)
     elif cmd == "buka" and len(sys.argv) > 2:
         buka(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else None)
     else:
