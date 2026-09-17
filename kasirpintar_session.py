@@ -113,6 +113,18 @@ def _ctx(p, headless=True):
     return browser, browser.new_context(storage_state=STATE)
 
 
+def _simpan_sesi(ctx):
+    """Tulis balik cookie hasil request terakhir. Server memutar nilai
+    laravel_session tiap request, dan sesinya rolling (tiap aktivitas
+    memperpanjang umur) -- jadi menyimpan yang terbaru bikin sesi bertahan
+    selama script dipakai rutin, tanpa perlu ambil cookie manual lagi."""
+    try:
+        ctx.storage_state(path=STATE)
+        os.chmod(STATE, 0o600)
+    except Exception as e:
+        print(f"  (peringatan: sesi gagal disimpan ulang -- {e})")
+
+
 def cek():
     """Tes apakah cookie sesinya masih dianggap login."""
     with _playwright()() as p:
@@ -121,6 +133,8 @@ def cek():
         page.goto(BASE, wait_until="domcontentloaded")
         url = page.url
         masih = "/login" not in url
+        if masih:
+            _simpan_sesi(ctx)
         print(("MASIH LOGIN" if masih else "SESI HABIS -- jalankan 'login' lagi") + f"  ({url})")
         print(f"Judul halaman: {page.title()}")
         browser.close()
@@ -163,6 +177,7 @@ def barang(keluar=None):
             "Content-Type": "application/json", "Accept": "application/json",
             "X-Requested-With": "XMLHttpRequest", "X-CSRF-Token": tok, "Referer": HAL_BARANG})
         body = r.body()
+        _simpan_sesi(ctx)
         browser.close()
 
     if body[:4] != b"\xd0\xcf\x11\xe0" and body[:2] != b"PK":
