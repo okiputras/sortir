@@ -29,7 +29,14 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 
 
 def main():
-    from playwright.sync_api import sync_playwright
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        # Playwright ada di python SISTEM. Kalau ada virtualenv yang aktif,
+        # `python3` menunjuk ke python venv itu dan modulnya tidak kelihatan.
+        sys.exit(f"playwright tidak ada di {sys.executable}\n"
+                 f"Jalankan pakai python sistem:\n"
+                 f"  /usr/bin/python3 {os.path.basename(__file__)}")
 
     import re
     plan = json.load(open(RENCANA, encoding="utf-8"))
