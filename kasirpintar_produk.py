@@ -179,11 +179,37 @@ def ubah(kode, yakin=False, **baru):
         sel = (f"#submit_update{lama['id_barang']}" if lama.get("id_barang")
                else "button[id^=submit_update]")
         page.click(sel, timeout=20_000)
+        # Halaman menahan submit lewat modal peringatan kalau harga jual di
+        # bawah harga beli (#fixHarga) atau kode barang diubah (#notif_kode).
+        # Modal itu punya tombol lanjutnya sendiri -- diklik, sama seperti yang
+        # dilakukan orang lewat browser. Harga tidak diubah apa pun di sini.
+        for tombol in ("#submit_harga", "#force_submit_code"):
+            try:
+                if page.is_visible(tombol, timeout=1500):
+                    page.click(tombol, timeout=5000)
+                    break
+            except Exception:
+                pass
         page.wait_for_timeout(9000)
-        ok = "/login" not in page.url
+        # baca ulang: form bisa menolak submit diam-diam (mis. harga jual <
+        # harga beli), jadi keberhasilan harus dibuktikan, bukan diasumsikan
+        page.goto(f"{BASE}/account/edit_barang_detail/{kode}", wait_until="domcontentloaded", timeout=60_000)
+        page.wait_for_timeout(2000)
+        kini = page.evaluate("""(() => {
+            const f = document.querySelector('form[action*="/account/edit_barang/"]');
+            if (!f) return null;
+            const g = n => (f.querySelector(`[name="${n}"]`) || {}).value ?? null;
+            return {nama:g('nama_barang'), beli:g('harga_beli'), jual:g('harga_jual'),
+                    kategori:g('kategori'), rak:g('letak_rak'), diskon:g('diskon'),
+                    stok_min:g('stok_minim'), keterangan:g('keterangan')}; })()""")
+        belum = [k for k, v in baru.items() if kini and str(kini.get(k)) != str(v)]
         _simpan_sesi(ctx)
         br.close()
-    print("\nTersimpan." if ok else "\nGAGAL menyimpan.")
+    if belum:
+        print(f"\nGAGAL: {', '.join(belum)} tidak tersimpan -- form menolak "
+              f"(sering karena harga jual lebih rendah dari harga beli).")
+    else:
+        print("\nTersimpan (sudah diverifikasi).")
 
 
 def hapus(kode, yakin=False):

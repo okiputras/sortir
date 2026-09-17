@@ -98,8 +98,32 @@ def main():
                     gagal += 1; continue
                 page.select_option("form[action*='/account/edit_barang/'] [name=kategori]", p["kategori"])
                 page.click(f"#submit_update{info['id']}", timeout=25_000)
+                # Modal peringatan "harga jual di bawah harga beli" (#fixHarga)
+                # menahan submit. Tombol lanjutnya milik halaman itu sendiri.
+                for tombol in ("#submit_harga", "#force_submit_code"):
+                    try:
+                        if page.is_visible(tombol, timeout=1200):
+                            page.click(tombol, timeout=5000)
+                            break
+                    except Exception:
+                        pass
                 page.wait_for_timeout(2200)
-                ok += 1
+                # Jangan percaya klik itu sendiri: form menolak submit (tanpa
+                # kirim POST sama sekali) kalau harga jual < harga beli, dan
+                # dulu itu terhitung "berhasil" padahal tidak tersimpan apa pun.
+                page.goto(f"{BASE}/account/edit_barang_detail/{p['kode']}",
+                          wait_until="domcontentloaded", timeout=45_000)
+                page.wait_for_timeout(1200)
+                kini = page.evaluate("""(() => {
+                    const f = document.querySelector('form[action*="/account/edit_barang/"]');
+                    const s = f && f.querySelector('[name=kategori]');
+                    return s ? s.value : null; })()""")
+                if kini == p["kategori"]:
+                    ok += 1
+                else:
+                    catat(f"[{i}] {p['nama'][:30]}: TIDAK tersimpan (form menolak -- "
+                          f"cek harga jual vs harga beli)")
+                    gagal += 1
                 if i % 25 == 0:
                     catat(f"  ... {i}/{len(plan)} (ok={ok} gagal={gagal} lewat={lewat})")
             except Exception as e:
