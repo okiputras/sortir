@@ -28,6 +28,7 @@ Pakai:
 """
 import argparse
 import os
+import re
 import sys
 
 STATE = os.environ.get("KP_STATE") or os.path.join(
@@ -180,17 +181,27 @@ def ubah(kode, yakin=False, **baru):
         sel = (f"#submit_update{lama['id_barang']}" if lama.get("id_barang")
                else "button[id^=submit_update]")
         page.click(sel, timeout=20_000)
-        # Halaman menahan submit lewat modal peringatan kalau harga jual di
-        # bawah harga beli (#fixHarga) atau kode barang diubah (#notif_kode).
-        # Modal itu punya tombol lanjutnya sendiri -- diklik, sama seperti yang
-        # dilakukan orang lewat browser. Harga tidak diubah apa pun di sini.
-        for tombol in ("#submit_harga", "#force_submit_code"):
+        # Kalau harga jual di bawah harga beli, halaman TIDAK mengirim form --
+        # ia memunculkan modal peringatan #fixHarga yang punya tombol lanjutnya
+        # sendiri. Diklik, sama seperti yang dilakukan orang lewat browser;
+        # harga tidak diubah apa pun di sini.
+        #
+        # Jangan pakai page.is_visible(): ia memeriksa saat itu juga tanpa
+        # menunggu, sedangkan modalnya perlu ~300 ms untuk tampil -- itu
+        # sebabnya versi sebelumnya tidak pernah mengklik tombolnya.
+        def _angka(x):
             try:
-                if page.is_visible(tombol, timeout=1500):
-                    page.click(tombol, timeout=5000)
-                    break
+                return float(re.sub(r"[^0-9.]", "", str(x))) if x else 0.0
+            except ValueError:
+                return 0.0
+        jual = _angka(baru.get("jual", lama.get("jual")))
+        beli = _angka(baru.get("beli", lama.get("beli")))
+        if jual < beli:
+            try:
+                page.wait_for_selector("#submit_harga", state="visible", timeout=8000)
+                page.click("#submit_harga", timeout=5000)
             except Exception:
-                pass
+                print("  (modal peringatan harga tidak bisa dilanjutkan)")
         page.wait_for_timeout(9000)
         # baca ulang: form bisa menolak submit diam-diam (mis. harga jual <
         # harga beli), jadi keberhasilan harus dibuktikan, bukan diasumsikan
