@@ -167,7 +167,15 @@ def ubah(kode, yakin=False, **baru):
             print("\n[SIMULASI] tidak ada yang disimpan. Tambahkan --yakin untuk menerapkan.")
             return
         for k, v in baru.items():
-            page.fill(f"[name={FIELD[k]}]", str(v))
+            sel_f = f"form[action*='/account/edit_barang/'] [name={FIELD[k]}]"
+            # kategori (dan field select lain) tidak bisa di-fill -- harus select_option
+            if page.eval_on_selector(sel_f, "e => e.tagName") == "SELECT":
+                try:
+                    page.select_option(sel_f, str(v))
+                except Exception:
+                    page.select_option(sel_f, label=str(v))
+            else:
+                page.fill(sel_f, str(v))
         sel = (f"#submit_update{lama['id_barang']}" if lama.get("id_barang")
                else "button[id^=submit_update]")
         page.click(sel, timeout=20_000)
