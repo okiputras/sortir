@@ -22,7 +22,7 @@ import sys
 BASE = "https://kasirpintar.co.id"
 DIR = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(DIR, "kasirpintar_state.json")
-RENCANA = os.path.join(DIR, "hasil_analisa", "rencana_kategori.json")
+RENCANA = os.environ.get("RENCANA") or os.path.join(DIR, "hasil_analisa", "rencana_kategori.json")
 LOG = os.path.join(DIR, "hasil_analisa", "log_kategori.txt")
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36")
@@ -31,7 +31,14 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 def main():
     from playwright.sync_api import sync_playwright
 
+    import re
     plan = json.load(open(RENCANA, encoding="utf-8"))
+    # Barcode yang tersimpan sbg ANGKA di Kasir Pintar terbaca "8992696521834.0"
+    # waktu xls-nya diparse (xlrd balikin float). Kode aslinya tanpa ".0" --
+    # kalau tidak dibuang, halaman editnya tidak ketemu & produknya terlewat.
+    for _p in plan:
+        if re.fullmatch(r"\d+\.0", str(_p["kode"])):
+            _p["kode"] = str(_p["kode"])[:-2]
     batas = int(sys.argv[1]) if len(sys.argv) > 1 else len(plan)
     kat_baru = sorted({p["kategori"] for p in plan if p.get("baru")})
     plan = plan[:batas]
