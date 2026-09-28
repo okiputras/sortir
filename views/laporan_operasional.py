@@ -213,9 +213,14 @@ else:
         )
 
 # ======================================================================
-# 3b. % DARI OMSET (+ margin gabungan Sortir+Operasional)
+# 3b. DARI OMSET KE LABA BERSIH
 # ======================================================================
-st.subheader("💰 % dari Omset & Dampak Margin")
+# Kenapa bukan "Operasional / Omset": di toko sayur margin kotornya tipis
+# (~13%), jadi biaya yang cuma 3% dari OMSET sebetulnya memakan seperempat
+# LABA. Membandingkan biaya ke omset bikin semuanya kelihatan kecil. Yang
+# menentukan untung-rugi adalah biaya dibanding laba kotor -- itu kolam
+# yang benar-benar dipakai membayar sortir dan operasional.
+st.subheader("💰 Dari Omset ke Laba Bersih")
 
 margin_pct = st.number_input(
     "Asumsi margin kotor (%)",
@@ -223,7 +228,8 @@ margin_pct = st.number_input(
     max_value=100.0,
     value=DEFAULT_MARGIN_PCT,
     step=0.1,
-    help="Default dari analisis data transaksi Kasir Pintar April 2026 (~12.8%).",
+    help="Default dari analisis data transaksi Kasir Pintar April 2026 (~12.8%). "
+         "Ubah kalau margin sekarang sudah beda -- semua angka di bawah ikut berubah.",
 )
 
 laporan_records = load_laporan()
@@ -241,58 +247,207 @@ if laporan_records:
     sesi_periode = sesi_unik[sesi_unik["periode"] == periode_terpilih]
     omset_proxy = (sesi_periode["Cash"] + sesi_periode["Qris"] + sesi_periode["Debit"] + sesi_periode["Tf"]).sum()
 
+total_sortir_periode = 0.0
+if sortir_records:
+    s_df = pd.DataFrame(sortir_records)
+    s_df["Tanggal"] = pd.to_datetime(s_df["Tanggal"], errors="coerce")
+    s_df["Subtotal"] = pd.to_numeric(s_df["Subtotal"], errors="coerce").fillna(0)
+    s_df["periode"] = s_df["Tanggal"].dt.to_period(freq)
+    s_df_f = s_df if cabang_selected == "Semua Cabang" else s_df[s_df["Cabang"] == cabang_selected]
+    total_sortir_periode = s_df_f[s_df_f["periode"] == periode_terpilih]["Subtotal"].sum()
+
+# Seberapa lengkap Laporan Harian periode ini? Biaya operasional masuk sekaligus
+# (gaji, sewa) sedangkan omset menumpuk hari demi hari -- jadi di awal periode
+# laporan ini selalu terlihat rugi besar. Tanpa peringatan, angka -7711% dari
+# omset terbaca seolah tokonya bangkrut.
+# Pembandingnya panjang periode PENUH, bukan hari yang sudah lewat: gaji dan
+# sewa masuk sekali untuk sebulan penuh, jadi menabrakkannya dengan omset satu
+# hari selalu menghasilkan angka rugi yang tidak berarti apa-apa.
+hari_terisi = 0
+hari_periode = 0
+if omset_proxy > 0 and laporan_records and not sesi_periode.empty:
+    hari_terisi = sesi_periode["Tanggal"].dt.date.nunique()
+    hari_periode = max(
+        1, (periode_terpilih.end_time.date() - periode_terpilih.start_time.date()).days + 1
+    )
+
 if omset_proxy <= 0:
     st.caption(f"Belum cukup data Laporan Harian {tipe_periode.lower()} ini untuk estimasi omset.")
 else:
-    margin_kotor = omset_proxy * margin_pct / 100
+    if hari_periode and hari_terisi < hari_periode:
+        st.warning(
+            f"⚠️ Laporan Harian periode ini baru terisi **{hari_terisi} dari {hari_periode} hari**. "
+            f"Gaji dan sewa sudah masuk utuh untuk satu periode penuh, tapi omsetnya baru "
+            f"{hari_terisi} hari — jadi laba bersih di bawah terlalu pesimis. "
+            f"Pakai hitungan per hari di bawah, atau tunggu periodenya lengkap."
+        )
+    belum_lengkap = bool(hari_terisi and hari_periode and hari_terisi < hari_periode)
+    laba_kotor = omset_proxy * margin_pct / 100
+    total_beban = total_periode + total_sortir_periode
+    laba_bersih = laba_kotor - total_beban
+    # % dari laba kotor -- angka yang menentukan, bukan % dari omset
+    pct_beban = (total_beban / laba_kotor * 100) if laba_kotor > 0 else 0.0
+    pct_bersih_omset = laba_bersih / omset_proxy * 100
 
-    c1, c2 = st.columns(2)
-    c1.metric("Omset (estimasi)", format_rupiah(omset_proxy))
-    c2.metric("Operasional / Omset", f"{total_periode / omset_proxy * 100:.1f}%")
+    # dua baris dua kolom -- empat kolom bikin angka rupiah kepotong "Rp 181.9..."
+    r1a, r1b = st.columns(2)
+    r1a.metric("Omset (estimasi)", format_rupiah(omset_proxy))
+    r1b.metric(f"Laba kotor ({margin_pct:.1f}%)", format_rupiah(laba_kotor))
+    r2a, r2b = st.columns(2)
+    r2a.metric(
+        "− Sortir + Operasional",
+        format_rupiah(total_beban),
+        delta=(f"{pct_beban:.0f}% dari laba kotor" if 0 < pct_beban < 1000
+               else ">999% dari laba kotor" if pct_beban >= 1000 else None),
+        delta_color="inverse",
+    )
+    r2b.metric(
+        "= Laba bersih",
+        format_rupiah(laba_bersih),
+        delta=f"{pct_bersih_omset:.1f}% dari omset",
+        delta_color="normal" if laba_bersih >= 0 else "inverse",
+    )
 
+    # versi "per Rp 100" -- paling gampang dibayangkan
+    g100 = margin_pct
+    b100 = total_beban / omset_proxy * 100
+    n100 = g100 - b100
+    # koma sebagai pemisah desimal -- hanya angkanya, jangan sentuh tanda baca kalimat
+    def _desimal(x):
+        return f"{x:.2f}".replace(".", ",")
+
+    if not belum_lengkap:
+        st.markdown(
+            f"Tiap **Rp 100** yang masuk laci: **Rp {_desimal(g100)}** jadi laba kotor, "
+            f"**Rp {_desimal(b100)}** habis buat sortir + operasional, "
+            f"sisa **Rp {_desimal(n100)}** benar-benar jadi untung."
+        )
+
+    if belum_lengkap:
+        st.markdown(
+            f"**Setara per hari** (dari {hari_terisi} hari yang sudah tercatat): "
+            f"omset {format_rupiah(omset_proxy / hari_terisi)}, "
+            f"laba kotor {format_rupiah(laba_kotor / hari_terisi)}. "
+            f"Kalau tempo ini bertahan sampai {hari_periode} hari, omset periode ini "
+            f"kira-kira {format_rupiah(omset_proxy / hari_terisi * hari_periode)} dan "
+            f"laba bersihnya "
+            f"{format_rupiah(omset_proxy / hari_terisi * hari_periode * margin_pct / 100 - total_beban)}."
+        )
+
+    if laba_bersih < 0:
+        st.error(
+            f"🔴 Sampai sekarang **minus {format_rupiah(abs(laba_bersih))}**"
+            + (" — tapi periode ini belum lengkap, lihat hitungan per hari di atas."
+               if belum_lengkap else
+               f". Laba kotor {format_rupiah(laba_kotor)} tidak cukup menutup "
+               f"sortir + operasional {format_rupiah(total_beban)}.")
+        )
+    elif pct_beban >= 70:
+        st.warning(
+            f"🟠 {pct_beban:.0f}% laba kotor habis untuk sortir + operasional. "
+            f"Sisa untuk pemilik cuma {format_rupiah(laba_bersih)}."
+        )
+    else:
+        st.success(
+            f"🟢 {pct_beban:.0f}% laba kotor terpakai sortir + operasional, "
+            f"sisa {format_rupiah(laba_bersih)} jadi laba bersih."
+        )
+
+    # susunan laba rugi ringkas
+    nan = float("nan")
+    _lk = (lambda x: x / laba_kotor * 100) if laba_kotor > 0 else (lambda x: nan)
+    rincian = pd.DataFrame(
+        [
+            {"Pos": "Omset", "Nilai": omset_proxy, "% dari Omset": 100.0, "% dari Laba Kotor": nan},
+            {"Pos": f"Laba kotor (margin {margin_pct:.1f}%)", "Nilai": laba_kotor,
+             "% dari Omset": margin_pct, "% dari Laba Kotor": 100.0},
+            {"Pos": "− Sortir", "Nilai": -total_sortir_periode,
+             "% dari Omset": -total_sortir_periode / omset_proxy * 100,
+             "% dari Laba Kotor": _lk(-total_sortir_periode)},
+            {"Pos": "− Operasional", "Nilai": -total_periode,
+             "% dari Omset": -total_periode / omset_proxy * 100,
+             "% dari Laba Kotor": _lk(-total_periode)},
+            {"Pos": "= Laba bersih", "Nilai": laba_bersih,
+             "% dari Omset": pct_bersih_omset,
+             "% dari Laba Kotor": _lk(laba_bersih)},
+        ]
+    )
+    rincian["Nilai"] = rincian["Nilai"].round()
+    st.dataframe(
+        rincian,
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "Nilai": st.column_config.NumberColumn(format="Rp %,d"),
+            "% dari Omset": st.column_config.NumberColumn(format="%.1f%%"),
+            "% dari Laba Kotor": st.column_config.NumberColumn(format="%.1f%%"),
+        },
+    )
+
+    # titik impas: omset minimum supaya laba bersih nol, dgn margin ini
+    if margin_pct > 0:
+        omset_bep = total_beban / (margin_pct / 100)
+        hari = max(1, hari_terisi)
+        selisih = omset_proxy - omset_bep
+        st.markdown(
+            f"**Titik impas:** dengan margin {margin_pct:.1f}%, omset harus minimal "
+            f"**{format_rupiah(omset_bep)}** ({format_rupiah(omset_bep / hari)}/hari dari {hari} hari data) "
+            f"cuma untuk menutup sortir + operasional. "
+            + (f"Omset periode ini **{format_rupiah(selisih)} di atas** titik itu."
+               if selisih >= 0 else
+               f"Omset periode ini **{format_rupiah(abs(selisih))} di bawah** titik itu.")
+        )
+        st.caption(
+            f"Kalau margin naik 1 poin jadi {margin_pct + 1:.1f}%, laba bersih naik "
+            f"{format_rupiah(omset_proxy * 0.01)} tanpa menambah omset sepeser pun."
+        )
+
+    # kategori: yang menentukan adalah porsi terhadap LABA KOTOR
     if not kategori_summary.empty:
-        kat_pct_omset = kategori_summary.copy()
-        kat_pct_omset["% dari Omset"] = kat_pct_omset["total"] / omset_proxy * 100
+        kat_pct = kategori_summary.copy()
+        kat_pct["% dari Omset"] = kat_pct["total"] / omset_proxy * 100
+        kat_pct["% dari Laba Kotor"] = (
+            kat_pct["total"] / laba_kotor * 100 if laba_kotor > 0 else float("nan"))
+        st.markdown("**Tiap kategori memakan berapa bagian laba kotor**")
         st.dataframe(
-            kat_pct_omset[["Kategori", "total", "% dari Omset"]].rename(columns={"total": "Total"}),
+            kat_pct[["Kategori", "total", "% dari Omset", "% dari Laba Kotor"]].rename(
+                columns={"total": "Total"}
+            ),
             hide_index=True,
             width="stretch",
             column_config={
                 "Total": st.column_config.NumberColumn(format="Rp %,d"),
                 "% dari Omset": st.column_config.NumberColumn(format="%.2f%%"),
+                "% dari Laba Kotor": st.column_config.NumberColumn(format="%.1f%%"),
             },
         )
-        gaji_row = kat_pct_omset[kat_pct_omset["Kategori"] == "Gaji Karyawan"]
-        if not gaji_row.empty:
-            gaji_pct = gaji_row.iloc[0]["% dari Omset"]
-            if gaji_pct > 20:
-                st.warning(f"⚠️ Gaji Karyawan {gaji_pct:.1f}% dari omset -- di atas rentang sehat (~15-20%) untuk retail.")
+        gaji_row = kat_pct[kat_pct["Kategori"] == "Gaji Karyawan"]
+        if not gaji_row.empty and laba_kotor > 0:
+            gaji_rp = gaji_row.iloc[0]["total"]
+            gaji_lk = gaji_row.iloc[0]["% dari Laba Kotor"]
+            # patokan "15-20% dari omset" itu untuk ritel bermargin tebal.
+            # Di sini margin kotornya ~13%, jadi patokan begitu mustahil --
+            # yang dipakai porsi terhadap laba kotor.
+            if gaji_lk > 60:
+                st.warning(
+                    f"⚠️ Gaji Karyawan memakan {gaji_lk:.0f}% laba kotor "
+                    f"({format_rupiah(gaji_rp)}) -- tersisa sedikit untuk beban lain."
+                )
+            elif gaji_row.iloc[0]["% dari Omset"] < 2:
+                st.info(
+                    f"ℹ️ Gaji Karyawan tercatat cuma {format_rupiah(gaji_rp)} "
+                    f"({gaji_lk:.1f}% dari laba kotor). Untuk toko seukuran ini angkanya "
+                    f"terlalu kecil buat seluruh gaji -- kemungkinan sebagian gaji belum "
+                    f"masuk Pengeluaran Operasional, jadi laba bersih di atas masih kelihatan "
+                    f"lebih besar dari yang sebenarnya."
+                )
             else:
-                st.caption(f"Gaji Karyawan: {gaji_pct:.1f}% dari omset (rentang sehat retail biasanya ~15-20%).")
+                st.caption(f"Gaji Karyawan: {gaji_lk:.1f}% dari laba kotor ({format_rupiah(gaji_rp)}).")
 
-    # gabungan sortir + operasional vs margin
-    total_sortir_periode = 0.0
-    if sortir_records:
-        s_df = pd.DataFrame(sortir_records)
-        s_df["Tanggal"] = pd.to_datetime(s_df["Tanggal"], errors="coerce")
-        s_df["Subtotal"] = pd.to_numeric(s_df["Subtotal"], errors="coerce").fillna(0)
-        s_df["periode"] = s_df["Tanggal"].dt.to_period(freq)
-        s_df_f = s_df if cabang_selected == "Semua Cabang" else s_df[s_df["Cabang"] == cabang_selected]
-        total_sortir_periode = s_df_f[s_df_f["periode"] == periode_terpilih]["Subtotal"].sum()
-
-    total_kebocoran = total_periode + total_sortir_periode
-    if margin_kotor > 0:
-        pct_kebocoran = total_kebocoran / margin_kotor * 100
-        st.markdown(
-            f"**Total kebocoran non-stok (Sortir + Operasional): {format_rupiah(total_kebocoran)}** "
-            f"= {format_rupiah(total_sortir_periode)} sortir + {format_rupiah(total_periode)} operasional"
-        )
-        st.error(
-            f"📉 Dari margin kotor ~{format_rupiah(margin_kotor)}, **{pct_kebocoran:.1f}% tergerus** "
-            f"sortir+operasional gabungan -- margin bersih sebenarnya ~{format_rupiah(margin_kotor - total_kebocoran)}."
-        )
     st.caption(
-        "Omset estimasi kasar dari Cash+Qris+Debit+Tf di Laporan Harian, bisa kurang akurat kalau ada sesi belum lengkap."
+        "Omset estimasi kasar dari Cash+Qris+Debit+Tf di Laporan Harian, bisa kurang akurat "
+        "kalau ada sesi belum lengkap. Laba kotor memakai asumsi margin di atas, bukan margin "
+        "riil per produk -- angka ini pemandu arah, bukan laporan keuangan."
     )
 
 # ======================================================================
