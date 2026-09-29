@@ -373,15 +373,13 @@ else:
         ]
     )
     rincian["Nilai"] = rincian["Nilai"].round()
+    for kol in ("% dari Omset", "% dari Laba Kotor"):
+        rincian[kol] = rincian[kol].map(lambda v: "—" if pd.isna(v) else f"{v:.1f}%")
     st.dataframe(
         rincian,
         hide_index=True,
         width="stretch",
-        column_config={
-            "Nilai": st.column_config.NumberColumn(format="Rp %,d"),
-            "% dari Omset": st.column_config.NumberColumn(format="%.1f%%"),
-            "% dari Laba Kotor": st.column_config.NumberColumn(format="%.1f%%"),
-        },
+        column_config={"Nilai": st.column_config.NumberColumn(format="Rp %,d")},
     )
 
     # titik impas: omset minimum supaya laba bersih nol, dgn margin ini
@@ -432,6 +430,10 @@ else:
                 st.warning(
                     f"⚠️ Gaji Karyawan memakan {gaji_lk:.0f}% laba kotor "
                     f"({format_rupiah(gaji_rp)}) -- tersisa sedikit untuk beban lain."
+                    + (" Gaji biasanya dibayar sekali sebulan, jadi minggu pembayaran "
+                       "selalu terlihat berat dan minggu lain terlalu ringan — "
+                       "pilih **Bulan** di atas untuk gambaran yang adil."
+                       if tipe_periode == "Minggu" else "")
                 )
             elif gaji_row.iloc[0]["% dari Omset"] < 2:
                 st.info(
