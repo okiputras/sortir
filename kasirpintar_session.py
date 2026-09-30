@@ -100,8 +100,14 @@ def impor():
             print(f"  dilewati (tak ada '='): {l[:40]}")
             continue
         nama, val = l.split("=", 1)
+        # domain TANPA titik di depan (host-only), sama seperti yang dipasang
+        # server. Kalau ditulis ".kasirpintar.co.id", cookie itu jadi slot
+        # KEDUA yang terpisah: server memutar laravel_session miliknya sendiri
+        # tiap request, tapi browser tetap mengirim dua-duanya dan yang basi
+        # lebih dulu -- Laravel membaca yang pertama, jadi nilai segarnya tak
+        # pernah terpakai dan sesinya mati padahal masih aktif dipakai.
         cookies.append({"name": nama.strip(), "value": val.strip(),
-                        "domain": ".kasirpintar.co.id", "path": "/"})
+                        "domain": "kasirpintar.co.id", "path": "/"})
     if not cookies:
         sys.exit("Tidak ada cookie yang terbaca.")
     with open(STATE, "w", encoding="utf-8") as f:
@@ -115,16 +121,42 @@ def _ctx(p, headless=True):
     if not os.path.exists(STATE):
         sys.exit(f"Belum ada sesi tersimpan. Jalankan dulu:  python3 {sys.argv[0]} login")
     browser = p.firefox.launch(headless=headless)
-    return browser, browser.new_context(storage_state=STATE)
+    # user-agent dan locale disamakan dengan jalur 'barang'; sesi yang dipakai
+    # dengan sidik browser berbeda-beda lebih gampang ditolak server.
+    return browser, browser.new_context(storage_state=STATE, user_agent=UA, locale="id-ID")
+
+
+# cookie yang menentukan login -- yang kembar di sini mematikan sesi
+_KUNCI = ("laravel_session", "XSRF-TOKEN")
+
+
+def _buang_kembar(state):
+    """Sisakan satu cookie per nama, yang host-only (tanpa titik di depan).
+
+    Kalau file sesi lama punya versi ".kasirpintar.co.id", ia ikut terkirim
+    mendahului cookie segar dari server dan bikin sesi tampak habis."""
+    hasil, sudah = [], set()
+    for c in sorted(state.get("cookies", []),
+                    key=lambda c: c.get("domain", "").startswith(".")):
+        if c.get("name") in _KUNCI and "kasirpintar" in c.get("domain", ""):
+            if c["name"] in sudah:
+                continue
+            sudah.add(c["name"])
+            c = {**c, "domain": c["domain"].lstrip(".")}
+        hasil.append(c)
+    state["cookies"] = hasil
+    return state
 
 
 def _simpan_sesi(ctx):
     """Tulis balik cookie hasil request terakhir. Server memutar nilai
-    laravel_session tiap request, dan sesinya rolling (tiap aktivitas
-    memperpanjang umur) -- jadi menyimpan yang terbaru bikin sesi bertahan
-    selama script dipakai rutin, tanpa perlu ambil cookie manual lagi."""
+    laravel_session tiap request dan sesinya rolling (tiap aktivitas
+    memperpanjang umur), jadi menyimpan yang terbaru bikin sesi bertahan
+    selama script dipakai rutin -- tanpa ambil cookie manual lagi."""
     try:
-        ctx.storage_state(path=STATE)
+        state = _buang_kembar(ctx.storage_state())
+        with open(STATE, "w", encoding="utf-8") as f:
+            json.dump(state, f)
         os.chmod(STATE, 0o600)
     except Exception as e:
         print(f"  (peringatan: sesi gagal disimpan ulang -- {e})")
