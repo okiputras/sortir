@@ -295,8 +295,25 @@ else:
                 "tapi belum kelihatan di sini, klik **🧹 Bersihkan cache** di bagian atas halaman."
                 .replace(",", ".")
             )
+            # Stok di sini dari etalase Olshopin, bukan dari Kasir Pintar. Diukur
+            # 2 Okt 2026: 27% produk SULFAT dan 24% PIRANHA angkanya beda antara
+            # dua sistem -- sebagian cuma selisih pembulatan (Olshopin bulat,
+            # Kasir Pintar desimal utk kg-an), sebagian beda jauh. Dikatakan di
+            # muka supaya rekomendasi order tidak ditelan mentah-mentah.
+            st.caption(
+                "⚠️ Stok dibaca dari etalase **Olshopin**, bukan dari Kasir Pintar. "
+                "Pengukuran 2 Oktober 2026: sekitar **1 dari 4 produk** angka stoknya "
+                "berbeda antara kedua sistem. Untuk produk kg-an selisihnya biasanya kecil "
+                "(pembulatan), tapi ada juga yang jauh. Pakai angka di sini sebagai "
+                "penunjuk arah; sebelum benar-benar order, cek stok fisiknya."
+            )
 
             trend_map = SH.trend_avg_qty(  # {nama_norm: (nama_asli, flat, tren, slope)}
+                cabang_pilih, months=n_bulan, exclude_bulan=bulan_dikecualikan,
+            )
+            # berapa bulan histori tiap produk -- di bawah 3 bulan regresi tren
+            # tidak jalan dan yang dipakai cuma rata-rata, jadi taksirannya goyah
+            histori_map = SH.bulan_histori(
                 cabang_pilih, months=n_bulan, exclude_bulan=bulan_dikecualikan,
             )
             baris, tanpa_histori = [], []
@@ -304,6 +321,7 @@ else:
                 n = S.norm(nama_ol)
                 v = trend_map.get(n) or trend_map.get(S._strip_kg(n))  # sama spt pencocokan harga di atas
                 _, flat, tren, slope = v if v else (None, 0.0, 0.0, 0.0)
+                n_hist = histori_map.get(n) or histori_map.get(S._strip_kg(n)) or 0
                 is_kg_item = S.is_kg(nama_ol)
                 buffer_pct = buffer_pct_kg if is_kg_item else buffer_pct_satuan
                 avg_dipakai = tren * (1 + buffer_pct / 100)
@@ -321,6 +339,7 @@ else:
                 rekomendasi_order = bulat(max(0.0, target_stok - stok))
                 item = {
                     "Nama": nama_ol,
+                    "Histori (bln)": n_hist,
                     "Stok Olshopin": stok,
                     "Rekomendasi Order": rekomendasi_order,
                     "Harga": harga_jual,
@@ -376,6 +395,16 @@ else:
                     .format(_fmt_angka, subset=kolom_angka)
                 )
                 st.dataframe(styled_urgent, use_container_width=True, hide_index=True)
+                tipis = [b for b in urgent if b["Histori (bln)"] < 3]
+                if tipis:
+                    st.caption(
+                        f"ℹ️ {len(tipis)} di antaranya histori penjualannya belum 3 bulan "
+                        f"({', '.join(b['Nama'] for b in tipis[:5])}"
+                        + (f", dan {len(tipis)-5} lagi" if len(tipis) > 5 else "")
+                        + "). Untuk produk sebaru itu tren belum bisa dihitung, jadi "
+                        "angkanya rata-rata sejak produk mulai dijual -- benar, tapi "
+                        "lebih goyah daripada produk yang sudah lama."
+                    )
             else:
                 st.success("Tidak ada produk yang diproyeksikan habis dalam rentang ini.")
 

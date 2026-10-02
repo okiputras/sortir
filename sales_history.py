@@ -176,7 +176,7 @@ def avg_daily_qty(cabang: str, months: int = 6, periode: str = "Total",
     if total_hari <= 0:
         return {}
 
-    qty_per_produk = {}  # nama_norm -> [qty_total, nama_display]
+    qty_per_produk = {}  # nama_norm -> [qty_total, nama_display, bulan_paling_awal]
     for r in rows:
         if r.get("Bulan") not in bulan_terpilih:
             continue
@@ -184,10 +184,26 @@ def avg_daily_qty(cabang: str, months: int = 6, periode: str = "Total",
         if not nama:
             continue
         n = norm(nama)
-        qty_per_produk.setdefault(n, [0.0, nama])
-        qty_per_produk[n][0] += float(r.get("Qty") or 0)
+        b = r.get("Bulan")
+        slot = qty_per_produk.setdefault(n, [0.0, nama, b])
+        slot[0] += float(r.get("Qty") or 0)
+        if b < slot[2]:
+            slot[2] = b
 
-    return {n: (nama, qty / total_hari) for n, (qty, nama) in qty_per_produk.items()}
+    # Pembagi dihitung PER PRODUK: cuma hari sejak produk itu pertama muncul,
+    # bukan seluruh jendela. Produk yang baru masuk bulan lalu kalau dibagi
+    # 6 bulan hari akan terlihat 6x lebih lambat dari sebenarnya -- dan karena
+    # histori 1-2 bulan belum cukup buat regresi tren, angka inilah yang dipakai
+    # Proyeksi Stok Habis. Akibatnya produk baru yang justru laris tidak pernah
+    # muncul di "Segera order" sampai benar-benar kehabisan.
+    # Bulan kosong SESUDAH kemunculan pertama tetap ikut dibagi -- itu memang
+    # hari jualan yang produknya ada tapi tidak laku (sama seperti monthly_series).
+    out = {}
+    for n, (qty, nama, bulan_mulai) in qty_per_produk.items():
+        hari_hidup = sum(h for b, h in hari_per_bulan.items()
+                         if b in bulan_terpilih and b >= bulan_mulai)
+        out[n] = (nama, qty / hari_hidup if hari_hidup > 0 else 0.0)
+    return out
 
 
 def monthly_series(cabang: str, months: int = 6, periode: str = "Total",
@@ -285,6 +301,17 @@ def trend_avg_qty(cabang: str, months: int = 6, periode: str = "Total",
             nilai_tren, slope = hasil
             out[n] = (nama, rata2_flat, nilai_tren, slope)
     return out
+
+
+def bulan_histori(cabang: str, months: int = 6, periode: str = "Total",
+                   exclude_bulan=None) -> dict:
+    """{nama_norm: jumlah_bulan_histori} di jendela yang sama dengan
+    trend_avg_qty(). Dipakai untuk menandai produk yang taksirannya berdiri
+    di atas data tipis: di bawah `min_bulan_tren` regresi tidak jalan sama
+    sekali dan yang dipakai cuma rata-rata, jadi angkanya jauh lebih goyah."""
+    return {n: len(seri) for n, (_, seri) in
+            monthly_series(cabang, months=months, periode=periode,
+                           exclude_bulan=exclude_bulan).items()}
 
 
 def hari_habis(stok, avg_qty_per_hari):
