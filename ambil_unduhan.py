@@ -18,7 +18,11 @@ yang jadi sumber PenjualanBulanan.
 Pakai:
     python3 ambil_unduhan.py                 # lihat apa yang akan dipindah
     python3 ambil_unduhan.py --pindah        # pindahkan
-    python3 ambil_unduhan.py --pindah --backfill   # lalu sinkronkan PenjualanBulanan
+    python3 ambil_unduhan.py --pindah --tanpa-backfill   # pindah saja, sheet tidak disentuh
+
+Sesudah memindah, PenjualanBulanan otomatis disinkronkan lewat
+backfill_penjualan.py -- berkas transaksi baru tidak ada gunanya kalau
+Proyeksi Stok Habis & Jadwal Sayur masih membaca angka bulan lalu.
 """
 import argparse
 import os
@@ -122,8 +126,15 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--pindah", action="store_true", help="benar-benar pindahkan")
     ap.add_argument("--salin", action="store_true", help="salin, jangan pindahkan")
+    # Backfill jalan SENDIRI sesudah ada file yang dipindah. Berkas transaksi
+    # baru tidak ada gunanya kalau PenjualanBulanan tidak ikut disegarkan --
+    # Proyeksi Stok Habis & Jadwal Sayur membaca dari sana, bukan dari berkasnya.
+    # Pernah kejadian: September masuk ke data-sulfat/ tapi PenjualanBulanan
+    # berhenti di Agustus, jadi proyeksinya sebulan ketinggalan tanpa ada tanda.
+    ap.add_argument("--tanpa-backfill", action="store_true",
+                    help="jangan sinkronkan PenjualanBulanan sesudah memindah")
     ap.add_argument("--backfill", action="store_true",
-                    help="jalankan backfill_penjualan.py setelah memindah")
+                    help=argparse.SUPPRESS)   # sudah default; disimpan agar perintah lama tetap jalan
     a = ap.parse_args()
 
     ketemu = cari()
@@ -151,12 +162,18 @@ def main():
         print(f"  -> {os.path.relpath(tujuan, DIR)}")
     print(f"\n{len(siap)} file {'disalin' if a.salin else 'dipindah'}.")
 
-    if a.backfill:
-        cab = sorted({"SULFAT" if "sulfat" in t else "PIRANHA" for _, t in siap})
-        for c in cab:
-            print(f"\n--- backfill {c} ---")
-            subprocess.run([sys.executable, os.path.join(DIR, "backfill_penjualan.py"),
-                            "--cabang", c], check=False)
+    if a.tanpa_backfill:
+        print("PenjualanBulanan TIDAK disinkronkan (--tanpa-backfill). "
+              "Proyeksi Stok Habis & Jadwal Sayur masih memakai data lama "
+              "sampai backfill_penjualan.py dijalankan.")
+        return
+    if a.salin:
+        return                      # menyalin = uji coba, jangan sentuh sheet
+    cab = sorted({"SULFAT" if "sulfat" in t else "PIRANHA" for _, t in siap})
+    for c in cab:
+        print(f"\n--- backfill {c} ---")
+        subprocess.run([sys.executable, os.path.join(DIR, "backfill_penjualan.py"),
+                        "--cabang", c], check=False)
 
 
 if __name__ == "__main__":
