@@ -44,7 +44,7 @@ SUMBER = {"SULFAT": "data-sulfat/Laporan_*.xls", "PIRANHA": "data-piranha/Lapora
 # Produk yang sengaja TIDAK ikut dihitung (permintaan owner). Dicocokkan PERSIS
 # per nama, huruf besar-kecil diabaikan -- jangan pakai pencocokan sebagian:
 # "candi" juga mengenai "bakso candi", produk lain yang harus tetap ikut.
-KECUALIKAN = {"pisang candi"}
+KECUALIKAN = {"pisang candi", "pisang kepok"}
 
 # Produk yang berganti nama/kode di tengah jalan. Dibuang dari daftar penggerak
 # saja (bukan dari total), karena penurunannya semu: barangnya pindah nama.
@@ -174,8 +174,9 @@ def bulan_sebelum(b):
 def rakit(bulan, katalog):
     sblm = bulan_sebelum(bulan)
     beban = None     # diisi sesudah transaksi dibaca
-    out = {"bulan": bulan, "bulan_sebelum": sblm, "kecuali": sorted(KECUALIKAN),
-           "ring": {}, "kat": {}, "bersih": {}, "gerak": {}, "rugi": {}, "deret": {}}
+    out = {"periode": bulan, "bulan_sebelum": sblm, "kecuali": sorted(KECUALIKAN),
+           "ring": {}, "kat": {}, "bersih": {}, "gerak": {}, "rugi": {},
+           "bulan": {}, "paruh": {}}
     semua_cab, rows_cab = {}, {}
     for cab in SUMBER:
         rows_cab[cab] = baca_transaksi(cab, {bulan, sblm})
@@ -191,7 +192,7 @@ def rakit(bulan, katalog):
         for r in semua:
             x = per_bulan[r["bulan"]]
             x[0] += r["omzet"]; x[1] += r["untung"]; x[2].add(r["tgl"]); x[3].add(r["struk"])
-        out["deret"][cab] = [{"b": b, "omzet": round(v[0]), "untung": round(v[1]),
+        out["bulan"][cab] = [{"b": b, "omzet": round(v[0]), "untung": round(v[1]),
                               "hari": len(v[2]), "struk": len(v[3]),
                               "perhari": round(v[0] / len(v[2])) if v[2] else 0,
                               "margin": round(v[1] / v[0] * 100, 2) if v[0] else 0}
@@ -205,7 +206,33 @@ def rakit(bulan, katalog):
             "perhari": round(ini[0] / len(ini[2])) if ini[2] else 0,
             "d_omzet": round((ini[0] - lalu[0]) / lalu[0] * 100, 1) if lalu[0] else None,
             "d_untung": round((ini[1] - lalu[1]) / lalu[1] * 100, 1) if lalu[1] else None,
+            "d_margin": round((ini[1] / ini[0] - lalu[1] / lalu[0]) * 100, 2)
+                        if ini[0] and lalu[0] else None,
         }
+        # bulan dengan margin terbaik -- jadi pembanding "untung yang hilang"
+        kandidat = [(b, v) for b, v in per_bulan.items() if v[0] > 0]
+        pb, pv = max(kandidat, key=lambda x: x[1][1] / x[1][0])
+        mp = pv[1] / pv[0]
+        out["ring"][cab]["puncak_bln"] = pb
+        out["ring"][cab]["puncak_margin"] = round(mp * 100, 2)
+        out["ring"][cab]["hilang"] = round(ini[0] * mp - ini[1])
+        # paruh pertama vs kedua bulan ini
+        hari_ini = collections.defaultdict(lambda: [0.0, 0.0, set()])
+        for r in semua:
+            if r["bulan"] != bulan:
+                continue
+            x = hari_ini[r["tgl"]]
+            x[0] += r["omzet"]; x[1] += r["untung"]; x[2].add(r["struk"])
+        batas = f"{bulan}-15"
+
+        def _paruh(pilih):
+            v = [x for t, x in hari_ini.items() if pilih(t)]
+            o = sum(x[0] for x in v); u = sum(x[1] for x in v)
+            s = sum(len(x[2]) for x in v); n = len(v) or 1
+            return {"perhari": round(o / n), "margin": round(u / o * 100, 2) if o else 0,
+                    "struk": round(s / n), "hari": len(v)}
+        out["paruh"][cab] = {"p1": _paruh(lambda t: t <= batas),
+                             "p2": _paruh(lambda t: t > batas)}
         # per kategori + 10 terlaris
         agg = collections.defaultdict(lambda: collections.defaultdict(lambda: [0.0, 0.0]))
         prod = collections.defaultdict(lambda: collections.defaultdict(lambda: [0.0, 0.0, 0.0]))
@@ -231,22 +258,33 @@ def rakit(bulan, katalog):
         # penggerak untung per produk
         pu = collections.defaultdict(lambda: collections.defaultdict(float))
         po = collections.defaultdict(lambda: collections.defaultdict(float))
+        pq = collections.defaultdict(lambda: collections.defaultdict(float))
         for r in rows:
-            pu[r["bulan"]][r["nama"]] += r["untung"]; po[r["bulan"]][r["nama"]] += r["omzet"]
+            pu[r["bulan"]][r["nama"]] += r["untung"]
+            po[r["bulan"]][r["nama"]] += r["omzet"]
+            pq[r["bulan"]][r["nama"]] += r["qty"]
+
+        def _mg(b, n):
+            o = po[b].get(n, 0)
+            return round(pu[b].get(n, 0) / o * 100, 1) if o else None
         g = []
         for n in set(pu[bulan]) | set(pu[sblm]):
             if n.strip().lower() in MIGRASI:
                 continue
             g.append({"n": n, "d": round(pu[bulan].get(n, 0) - pu[sblm].get(n, 0)),
-                      "au": round(pu[sblm].get(n, 0)), "su": round(pu[bulan].get(n, 0))})
+                      "au": round(pu[sblm].get(n, 0)), "su": round(pu[bulan].get(n, 0)),
+                      "am": _mg(sblm, n), "sm": _mg(bulan, n),
+                      "aq": round(pq[sblm].get(n, 0), 1), "sq": round(pq[bulan].get(n, 0), 1)})
         g.sort(key=lambda x: x["d"])
         out["gerak"][cab] = {"turun": g[:8], "naik": g[-6:][::-1]}
         out["rugi"][cab] = sorted(
-            [{"n": n, "omzet": round(po[bulan][n]), "untung": round(pu[bulan][n])}
+            [{"n": n, "omzet": round(po[bulan][n]), "untung": round(pu[bulan][n]),
+              "qty": round(pq[bulan][n], 1)}
              for n in po[bulan] if po[bulan][n] > 200_000 and pu[bulan][n] <= 0],
             key=lambda x: x["untung"])
         # bersih
         s, o, rinci = beban.get(cab, (0, 0, []))
+        # dipakai halaman utk memperingatkan kalau nilai form meremehkan sortir
         b = ini[1] - s - o
         out["bersih"][cab] = {"omzet": round(ini[0]), "kotor": round(ini[1]),
                               "margin_kotor": round(ini[1] / ini[0] * 100, 2) if ini[0] else 0,
