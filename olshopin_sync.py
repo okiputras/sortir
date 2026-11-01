@@ -8,6 +8,8 @@ Alur:
   fetch_catalog(tid) -> {nama_barang: (harga_jual, stok)} dari semua halaman katalog
                          toko dgn TID itu (default: toko SULFAT, dipakai sinkronisasi
                          harga di tab Produk -- lihat modul ini apa adanya sejak awal)
+  fetch_kategori(tid) -> {nama_barang: kategori}, dipakai Proyeksi Stok Habis untuk
+                         menyaring kategori yang tidak ikut diproyeksikan
   load_mapping(sh)   -> mapping manual {nama_tab -> nama_olshopin} dari tab ProdukMapping
   plan_updates(...)  -> daftar rencana perubahan per baris tab Produk (termasuk stok
                          Olshopin per produk, dipakai utk proyeksi stok habis)
@@ -49,8 +51,8 @@ def _entry(x):
     return (x["harga_jual"], int(x.get("stok") or 0))
 
 
-def fetch_catalog(tid=OLSHOP_TID):
-    """Ambil seluruh katalog toko `tid` -> dict {nama_barang: (harga_jual, stok)}.
+def _semua_barang(tid):
+    """Semua item mentah katalog toko `tid` (list dict dari __SHOP_HOME__).
 
     Cara cepat: 1 request pakai ?limit= (server mengembalikan semua produk).
     Fallback: paginasi 20/halaman (paralel) bila limit tidak lengkap."""
@@ -60,24 +62,36 @@ def fetch_catalog(tid=OLSHOP_TID):
         data = b.get("data", [])
         total = int(b.get("total") or 0)
         if data and len(data) >= total:
-            return {x["nama_barang"]: _entry(x) for x in data}
+            return data
     except Exception:
         pass
 
     # fallback paginasi
     first = _fetch_barangs(f"{base}?page=1")
     last = int(first.get("last_page", 1) or 1)
-    catalog = {x["nama_barang"]: _entry(x) for x in first.get("data", [])}
+    items = list(first.get("data", []))
     if last > 1:
         with ThreadPoolExecutor(max_workers=8) as ex:
             futs = [ex.submit(_fetch_barangs, f"{base}?page={p}") for p in range(2, last + 1)]
             for f in as_completed(futs):
                 try:
-                    for x in f.result().get("data", []):
-                        catalog[x["nama_barang"]] = _entry(x)
+                    items.extend(f.result().get("data", []))
                 except Exception:
                     pass
-    return catalog
+    return items
+
+
+def fetch_catalog(tid=OLSHOP_TID):
+    """Ambil seluruh katalog toko `tid` -> dict {nama_barang: (harga_jual, stok)}."""
+    return {x["nama_barang"]: _entry(x) for x in _semua_barang(tid)}
+
+
+def fetch_kategori(tid=OLSHOP_TID):
+    """{nama_barang: kategori} toko `tid`, kategori huruf kecil ('' kalau kosong).
+
+    Kategorinya yang diisi di Kasir Pintar; Olshopin ikut menampilkannya."""
+    return {x["nama_barang"]: str(x.get("kategori") or "").strip().lower()
+            for x in _semua_barang(tid)}
 
 
 # ---------------- normalisasi & aturan ----------------

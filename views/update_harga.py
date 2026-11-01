@@ -8,6 +8,8 @@ penjualan harian) & Upload Data Penjualan (sumber data histori penjualan --
 dipakai di sini DAN di halaman terpisah "Jadwal Sayur Pagi/Siang").
 Proyeksi Stok jalan dari SELURUH katalog Olshopin, tidak terikat ke tab
 Produk -- tab Produk cuma dipakai sinkronisasi harga (section paling atas).
+Kecuali beberapa kategori yang sengaja tidak diproyeksikan, lihat
+KATEGORI_TANPA_PROYEKSI.
 
 Produk yang belum cocok (sinkronisasi harga) otomatis dibiarkan; pemetaan
 manual dibaca dari tab ProdukMapping (nama_barang_edit | nama_olshopin).
@@ -16,6 +18,7 @@ Dikunci login owner (session "ops_authenticated"), sama seperti Laporan Sortir.
 """
 import math
 import os
+import re
 
 import pandas as pd
 import streamlit as st
@@ -42,6 +45,14 @@ DEFAULT_BUFFER = {
     ("PIRANHA", "kg"): 55, ("PIRANHA", "satuan"): 20,
 }
 FALLBACK_BUFFER = 10
+
+# Tidak ikut Proyeksi Stok Habis (permintaan owner, 1 Nov 2026). Kategori dibaca
+# dari Olshopin (sama dgn kategori di Kasir Pintar). Kresek & plastik BUKAN
+# kategori -- di sana masuk "pembungkus" bareng foam, kertas minyak, dll. yang
+# tetap ikut -- jadi dikenali dari nama barangnya. "tanpa plastik" (mis. lemon
+# California) bukan barang plastik, jadi dikecualikan dari aturan nama itu.
+KATEGORI_TANPA_PROYEKSI = {"titipan", "sayuran", "aice", "media tanam", "frozen"}
+NAMA_TANPA_PROYEKSI = re.compile(r"\bkresek\b|(?<!tanpa )\bplastik\b", re.I)
 
 st.title("💰 Update Harga (Olshopin)")
 
@@ -155,6 +166,11 @@ def _catalog_for(tid):
     return S.fetch_catalog(tid)
 
 
+@st.cache_data(ttl=21600, show_spinner=False)
+def _kategori_for(tid):
+    return S.fetch_kategori(tid)
+
+
 c1, c2 = st.columns([1, 1])
 if c1.button("🔄 Tarik katalog Olshopin", type="primary"):
     with st.spinner("Menarik katalog Olshopin (1 request, ~1–2 dtk)…"):
@@ -167,6 +183,7 @@ if c2.button("🧹 Bersihkan cache"):
     # BASI sampai 6 jam kemudian (pernah kejadian: produk yg baru abis stoknya
     # gak nongol di "Segera order" krn masih baca stok lama dari cache).
     _catalog_for.clear()
+    _kategori_for.clear()
     st.session_state.pop("olshop_catalog", None)
     st.info("Cache katalog dibersihkan (termasuk Proyeksi Stok Habis). Klik 'Tarik katalog' untuk ambil ulang.")
 
@@ -226,7 +243,8 @@ st.divider()
 st.header("📦 Proyeksi Stok Habis")
 st.caption(
     "Semua produk di **katalog Olshopin cabang terpilih** (bukan cuma yang ada "
-    "di tab Produk -- termasuk indomie, saori, dan barang sembako/kemasan lain) "
+    "di tab Produk -- termasuk indomie, saori, dan barang sembako/kemasan lain; "
+    "kecuali titipan, sayuran, aice, media tanam, frozen, kresek & plastik) "
     "dibandingkan stok real-time-nya dengan rata-rata penjualan **bertren** "
     "(bukan rata-rata datar -- cabang yang penjualannya lagi naik/turun tidak "
     "ketarik ke rata-rata lama), supaya kelihatan produk apa saja yang harus "
@@ -262,9 +280,10 @@ else:
         else:
             with st.expander("⚙️ Pengaturan perhitungan (rentang data, kecualikan bulan, buffer)"):
                 c5, c6, c7 = st.columns([1, 1, 1])
+                # Default 3 bulan terakhir (permintaan owner, 1 Nov 2026; sebelumnya 6).
                 n_bulan = c5.number_input(
                     "Pakai berapa bulan data terakhir?",
-                    min_value=1, max_value=len(bulan_ada), value=min(6, len(bulan_ada)),
+                    min_value=1, max_value=len(bulan_ada), value=min(3, len(bulan_ada)),
                     step=1, key="proyeksi_bulan",
                 )
                 buffer_pct_kg = c6.number_input(
@@ -289,6 +308,17 @@ else:
 
             with st.spinner(f"Menarik katalog Olshopin {cabang_pilih}…"):
                 catalog_cabang = _catalog_for(tid)
+                kategori_cabang = _kategori_for(tid)
+            disaring = {
+                nama for nama in catalog_cabang
+                if kategori_cabang.get(nama, "") in KATEGORI_TANPA_PROYEKSI
+                or NAMA_TANPA_PROYEKSI.search(nama)
+            }
+            catalog_cabang = {k: v for k, v in catalog_cabang.items() if k not in disaring}
+            st.caption(
+                f"{len(disaring):,}".replace(",", ".") + " produk tidak ikut dihitung: kategori "
+                "titipan, sayuran, aice, media tanam, frozen, serta barang kresek & plastik."
+            )
             st.caption(
                 f"Katalog Olshopin {cabang_pilih}: {len(catalog_cabang):,} produk. "
                 "Di-cache 6 jam -- kalau ada produk yg stoknya baru saja berubah di Olshopin "
