@@ -14,7 +14,7 @@ import math
 import pandas as pd
 import streamlit as st
 
-from gsheet_client import get_spreadsheet, load_cabang
+from gsheet_client import load_cabang, load_produk_values
 import olshopin_sync as S
 import sales_history as SH
 
@@ -93,7 +93,7 @@ with st.expander("⚙️ Pengaturan lanjutan (buffer, kecualikan bulan)"):
         options=bulan_ada_pagi, default=[], key="jadwal_exclude",
     )
 
-produk_rows = get_spreadsheet().worksheet("Produk").get_all_values()[1:]
+produk_rows = load_produk_values()[1:]
 # trend_avg_qty -> {nama_norm: (nama_asli, rata2_flat, rata2_tren, slope)}; pakai
 # rata2_tren (bukan flat) supaya cabang yg lagi tren naik/turun (bukan stagnan)
 # tidak ketarik ke rata-rata lama yg sudah tidak mewakili kondisi sekarang.

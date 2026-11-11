@@ -23,7 +23,7 @@ import re
 import pandas as pd
 import streamlit as st
 
-from gsheet_client import get_spreadsheet, load_cabang
+from gsheet_client import clear_master_cache, get_spreadsheet, load_cabang, load_produk_values
 import olshopin_sync as S
 import sales_history as SH
 from sales_upload import parse_transaksi
@@ -86,9 +86,9 @@ st.caption(
     "tipe-nya masih kosong tidak disentuh (sudah otomatis kebaca satuan)."
 )
 
-sh_tipe = get_spreadsheet()
-ws_tipe = sh_tipe.worksheet("Produk")
-rows_tipe = ws_tipe.get_all_values()[1:]
+# Dari cache (diambil ulang tiap menit), bukan langsung ke sheet tiap klik --
+# aman, karena tombol Terapkan di bawah membaca ulang & memverifikasi tiap baris.
+rows_tipe = load_produk_values()[1:]
 
 rencana_tipe = []
 for i, row in enumerate(rows_tipe):
@@ -125,6 +125,7 @@ if rencana_tipe:
             # ditulis) daripada salah menimpa produk lain. Ditulis sekaligus
             # via batch_update (1 request), bukan satu-satu, supaya tidak ada
             # jeda antar tulisan yang bisa kena resort di tengah jalan.
+            ws_tipe = get_spreadsheet().worksheet("Produk")
             rows_terkini = ws_tipe.get_all_values()[1:]
             updates, dilewati = [], []
             for r in rencana_tipe:
@@ -136,6 +137,7 @@ if rencana_tipe:
                 updates.append({"range": f"D{r['row_no']}", "values": [[r["Tipe Baru"]]]})
             if updates:
                 ws_tipe.batch_update(updates, value_input_option="USER_ENTERED")
+                clear_master_cache()
         if updates:
             st.success(f"✅ Kolom tipe diperbarui untuk {len(updates)} produk.")
         if dilewati:
@@ -236,6 +238,7 @@ else:
     if st.button(f"💾 Terapkan ke Sheet ({len(matched)} produk)", type="primary"):
         with st.spinner("Menulis ke sheet…"):
             n = S.apply_updates(ws, plan)
+            clear_master_cache()
         st.success(f"✅ Selesai — {n} produk diperbarui di tab Produk.")
         st.balloons()
 

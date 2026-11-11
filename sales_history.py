@@ -37,6 +37,8 @@ import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import streamlit as st
+
 from gsheet_client import get_spreadsheet
 from olshopin_sync import norm  # normalizer sama dgn yg dipakai cocokkan nama katalog Olshopin
 
@@ -89,7 +91,14 @@ def _ws():
     return sh.worksheet(SHEET_NAME)
 
 
+@st.cache_data(ttl=600, show_spinner=False)
 def load_all() -> list[dict]:
+    """Disimpan 10 menit. Jadwal Sayur & Proyeksi Stok Habis memanggil ini
+    3-4 kali per klik (tiap kali = 3 request baca + puluhan ribu baris), dan
+    dulu itulah yang menghabiskan kuota baca Google per menit. Isinya cuma
+    berubah saat upload/backfill; tulisan lewat aplikasi membersihkan cache
+    ini sendiri (replace_month, ensure_periode_seeded). Sesudah
+    backfill_penjualan.py dari lokal, angka baru muncul paling lambat 10 menit."""
     return _ws().get_all_records()
 
 
@@ -120,6 +129,7 @@ def ensure_periode_seeded(cabang: str) -> None:
         ws.update([HEADER], "A1")  # refresh header (sheet lama mungkin blm punya kolom Periode)
         ws.append_rows([[r.get(c, "") for c in HEADER] for r in new_rows],
                         value_input_option="USER_ENTERED")
+        load_all.clear()
 
 
 def bulan_terupload(cabang: str, periode: str = "Total") -> set:
@@ -154,6 +164,7 @@ def replace_month(cabang: str, bulan: str, qty_per_produk: dict, hari: int,
     if all_rows:
         ws.append_rows([[r.get(c, "") for c in HEADER] for r in all_rows],
                         value_input_option="USER_ENTERED")
+    load_all.clear()
 
 
 def avg_daily_qty(cabang: str, months: int = 6, periode: str = "Total",

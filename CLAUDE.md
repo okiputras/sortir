@@ -38,6 +38,12 @@ All three are gitignored. For local dev, drop the two files in the repo root.
 - Deletes are physical (`deleteDimension`), not soft — protected by a single-cell lock in the `_Lock` tab (`_acquire_lock`/`_release_lock`) because deleting shifts row indices, and two concurrent deletes racing would otherwise corrupt each other. Rows are matched and removed by `Session ID`.
 - Bulk reads batch across every monthly sheet in one `values.batchGet` call (`_batch_get_records`) rather than one request per sheet, so the request count stays flat as monthly sheets accumulate.
 - `Produk`, `Cabang`, `Karyawan`, `ProdukMapping`, `PenjualanBulanan`, `_Lock` are **not** month-split and are read/written directly by whichever module owns them.
+- **Read quota.** Every app session *and* every local script share one service account, and Google caps it at ~60 read requests per minute. Going over that crashed pages with a 429 in production on 2026-11-08.
+  - `_RetryHTTPClient` waits and retries 429s (and 5xx on GETs) for about a minute instead of crashing. `LOCK_TIMEOUT_SECONDS` must stay above that retry budget.
+  - The worksheet list is cached (`_worksheets`, cleared when the app creates a tab).
+  - Produk/Cabang/Karyawan come from one batched read (`_load_master`, 60 s TTL; call `clear_master_cache()` after writing to them).
+  - `sales_history.load_all` is cached for 10 minutes.
+  - Keep new read paths batched and cached: an uncached read in a page body runs on every click.
 
 ### Master data tabs
 

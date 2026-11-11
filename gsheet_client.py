@@ -16,13 +16,18 @@ from zoneinfo import ZoneInfo
 import streamlit as st
 import gspread
 from google.oauth2.service_account import Credentials
+from gspread.http_client import HTTPClient
 from gspread.utils import fill_gaps, numericise_all, to_records
 from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
 
 JAKARTA = ZoneInfo("Asia/Jakarta")
 
 LOCK_SHEET = "_Lock"
-LOCK_TIMEOUT_SECONDS = 15
+# Lock dianggap basi (pemegangnya crash) sesudah sekian detik. Harus jauh di
+# atas lama _RetryHTTPClient menunggu kuota (~1 menit per request): pemegang
+# lock yang sedang menunggu kuota TIDAK boleh dianggap crash -- kalau lock-nya
+# direbut di tengah hapus, index baris yang sudah dia cari jadi salah.
+LOCK_TIMEOUT_SECONDS = 150
 LOCK_MAX_WAIT_SECONDS = 25
 
 SCOPES = [
@@ -119,10 +124,39 @@ def _load_spreadsheet_id() -> str:
         return f.read().strip()
 
 
+class _RetryHTTPClient(HTTPClient):
+    """Coba ulang request yang ditolak Google karena kuota, bukan langsung crash.
+
+    Semua sesi aplikasi -- plus skrip lokal yang memakai service_account.json --
+    berbagi SATU service account, dan Google membatasinya ~60 request baca per
+    menit. Di jam ramai (pagi, beberapa karyawan input bareng) batas itu pernah
+    tersentuh dan halamannya langsung error 429. Kuotanya dihitung per menit,
+    jadi menunggu sebentar lalu mencoba lagi hampir selalu berhasil.
+
+    Yang diulang: 429 untuk semua request (request yang ditolak memang belum
+    dijalankan, jadi aman diulang) dan 5xx khusus GET. Tulisan yang kena 5xx
+    TIDAK diulang -- bisa saja sebenarnya sudah masuk, dan mengulangnya bikin
+    baris dobel. (BackOffHTTPClient bawaan gspread tidak dipakai: penghitung
+    backoff-nya dibagi antar-thread dan bisa menunggu sampai ~4 menit.)
+    """
+
+    TUNGGU = (2, 4, 8, 16, 32)  # total ~1 menit = satu jendela kuota
+
+    def request(self, method, endpoint, *args, **kwargs):
+        for tunggu in self.TUNGGU + (None,):
+            try:
+                return super().request(method, endpoint, *args, **kwargs)
+            except gspread.exceptions.APIError as e:
+                ulang = e.code == 429 or (e.code >= 500 and method.lower() == "get")
+                if tunggu is None or not ulang:
+                    raise
+                time.sleep(tunggu + random.uniform(0, 1))
+
+
 @st.cache_resource(show_spinner=False)
 def get_spreadsheet():
     creds = _load_credentials()
-    client = gspread.authorize(creds)
+    client = gspread.authorize(creds, http_client=_RetryHTTPClient)
     spreadsheet_id = _load_spreadsheet_id()
     try:
         return client.open_by_key(spreadsheet_id)
@@ -145,17 +179,37 @@ def _monthly_sheet_pattern(base_name: str) -> re.Pattern:
     return re.compile(rf"^{re.escape(base_name)}_(\d{{2}})_(\d{{4}})$")
 
 
+@st.cache_resource(ttl=600, show_spinner=False)
+def _worksheets() -> list:
+    """Daftar tab spreadsheet, disimpan 10 menit. Dulu diambil ulang (1 request
+    baca) setiap kali data Sortir/Laporan/Pengeluaran dimuat dan setiap
+    simpan/hapus, padahal tab baru cuma muncul sebulan sekali. Dibersihkan
+    begitu aplikasi sendiri membuat tab baru."""
+    return get_spreadsheet().worksheets()
+
+
+def _find_sheet(title: str):
+    """Worksheet bertitel `title` dari daftar tersimpan. Kalau tidak ketemu,
+    daftarnya disegarkan sekali dulu (bisa jadi basi) sebelum balik None."""
+    for segarkan in (False, True):
+        if segarkan:
+            _worksheets.clear()
+        for ws in _worksheets():
+            if ws.title == title:
+                return ws
+    return None
+
+
 def _data_sheets(base_name: str) -> list:
     """Semua worksheet yang jadi sumber data untuk base_name ini: sheet
     lama (nama polos, isinya data sebelum fitur pemisahan-per-bulan ada)
     kalau masih ada, lalu semua sheet bulanan "Base_MM_YYYY", diurutkan
     kronologis lama -> baru. Dipakai supaya laporan tetap bisa melihat
     seluruh histori walau datanya sekarang tersebar per bulan."""
-    sh = get_spreadsheet()
     pattern = _monthly_sheet_pattern(base_name)
     legacy = None
     monthly = []
-    for ws in sh.worksheets():
+    for ws in _worksheets():
         if ws.title == base_name:
             legacy = ws
         else:
@@ -170,63 +224,79 @@ def _ensure_monthly_sheet(base_name: str, header: list[str], dt: datetime):
     """Sheet tujuan insert untuk bulan `dt` (mis. "Sortir_09_2026"),
     dibuat otomatis dengan header kalau bulan ini baru pertama kali ada
     transaksi -- tujuannya biar data tiap bulan terpisah rapi."""
-    sh = get_spreadsheet()
     title = _monthly_sheet_name(base_name, dt)
-    titles = {ws.title for ws in sh.worksheets()}
-    if title in titles:
-        return sh.worksheet(title)
-    ws = sh.add_worksheet(title=title, rows=1000, cols=max(len(header), 1))
-    ws.update([header], "A1")
+    ws = _find_sheet(title)
+    if ws is None:
+        ws = get_spreadsheet().add_worksheet(title=title, rows=1000, cols=max(len(header), 1))
+        ws.update([header], "A1")
+        _worksheets.clear()
     return ws
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+def _batch_get_values(titles) -> list[list[list]]:
+    """Isi mentah banyak tab sekaligus lewat 1 request HTTP
+    (spreadsheets.values.batchGet), bukan 1 request per tab. Urutannya sama
+    dengan `titles`; tab kosong -> []."""
+    if not titles:
+        return []
+    quote = "'"
+    ranges = [f"{quote}{t.replace(quote, quote + quote)}{quote}" for t in titles]
+    response = get_spreadsheet().values_batch_get(ranges)
+    return [vr.get("values", []) for vr in response.get("valueRanges", [])]
+
+
+def _to_records(raw_values: list[list]) -> list[dict]:
+    """Logikanya sengaja disamakan persis dengan gspread's Worksheet.get_all_records()
+    (fill_gaps buat baris yang lebih pendek dari header, numericise_all
+    buat konversi angka, to_records buat pasangkan header->value) supaya
+    hasilnya identik, cuma jalur pengambilan datanya yang beda."""
+    if not raw_values:
+        return []
+    values = fill_gaps(raw_values)
+    return to_records(values[0], [numericise_all(row) for row in values[1:]])
+
+
+MASTER_SHEETS = ("Produk", "Cabang", "Karyawan")
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_master() -> dict:
+    """Isi mentah tab Produk, Cabang & Karyawan dalam SATU request. Dulu tiap
+    tab diambil sendiri lewat worksheet(...).get_all_records() = 2 request per
+    tab (cari tab + ambil isi). TTL 1 menit: cukup jarang untuk kuota baca
+    (lihat _RetryHTTPClient), cukup cepat supaya karyawan/produk yang baru
+    ditambahkan langsung di sheet segera muncul di dropdown."""
+    return dict(zip(MASTER_SHEETS, _batch_get_values(MASTER_SHEETS)))
+
+
 def load_produk():
-    ws = get_spreadsheet().worksheet("Produk")
-    return ws.get_all_records()
+    return _to_records(_load_master()["Produk"])
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+def load_produk_values() -> list[list]:
+    """Seperti worksheet("Produk").get_all_values() (header ikut), tapi dari cache."""
+    raw = _load_master()["Produk"]
+    return fill_gaps(raw) if raw else []
+
+
 def load_cabang():
-    ws = get_spreadsheet().worksheet("Cabang")
-    return ws.get_all_records()
+    return _to_records(_load_master()["Cabang"])
 
 
-@st.cache_data(ttl=300, show_spinner=False)
 def load_karyawan():
-    ws = get_spreadsheet().worksheet("Karyawan")
-    return ws.get_all_records()
+    return _to_records(_load_master()["Karyawan"])
+
+
+def clear_master_cache() -> None:
+    """Panggil sesudah aplikasi menulis ke tab Produk/Cabang/Karyawan."""
+    _load_master.clear()
 
 
 def _batch_get_records(worksheets: list) -> list[dict]:
-    """Ambil isi banyak worksheet sekaligus lewat 1 request HTTP
-    (spreadsheets.values.batchGet), bukan 1 request per sheet lewat
-    ws.get_all_records() satu-satu. Jumlah request jadi tetap 1 walau
-    sheet bulanannya terus nambah tiap bulan.
-
-    Logikanya sengaja disamakan persis dengan gspread's Worksheet.get_all_records()
-    (fill_gaps buat baris yang lebih pendek dari header, numericise_all
-    buat konversi angka, to_records buat pasangkan header->value) supaya
-    hasilnya identik, cuma jalur pengambilan datanya yang beda.
-    """
-    if not worksheets:
-        return []
-    sh = get_spreadsheet()
-    quote = "'"
-    escaped_titles = [ws.title.replace(quote, quote + quote) for ws in worksheets]
-    ranges = [f"{quote}{title}{quote}" for title in escaped_titles]
-    response = sh.values_batch_get(ranges)
-
-    records = []
-    for value_range in response.get("valueRanges", []):
-        raw_values = value_range.get("values", [])
-        if not raw_values:
-            continue
-        values = fill_gaps(raw_values)
-        keys = values[0]
-        rows = [numericise_all(row) for row in values[1:]]
-        records.extend(to_records(keys, rows))
-    return records
+    """Isi banyak worksheet sekaligus lewat 1 request HTTP, bukan 1 request
+    per sheet lewat ws.get_all_records() satu-satu. Jumlah request jadi tetap
+    1 walau sheet bulanannya terus nambah tiap bulan."""
+    return [r for raw in _batch_get_values([ws.title for ws in worksheets]) for r in _to_records(raw)]
 
 
 def _load_all_records(base_name: str) -> list[dict]:
@@ -263,7 +333,18 @@ def _parallel_load(jobs: dict) -> dict:
 
     with ThreadPoolExecutor(max_workers=max(len(jobs), 1)) as ex:
         futures = {k: ex.submit(_run, fn) for k, fn in jobs.items()}
-        return {k: f.result() for k, f in futures.items()}
+        try:
+            return {k: f.result() for k, f in futures.items()}
+        except gspread.exceptions.APIError as e:
+            # Sampai sini berarti _RetryHTTPClient sudah menunggu ~1 menit dan
+            # kuota masih habis -- tampilkan pesan, bukan traceback.
+            if e.code != 429:
+                raise
+            raise RuntimeError(
+                "Google Sheets sedang menolak permintaan karena batas baca per "
+                "menit terlampaui (terlalu banyak yang memakai aplikasi bersamaan). "
+                "Tunggu sekitar 1 menit, lalu muat ulang halaman ini."
+            ) from e
 
 
 def load_all() -> dict:
@@ -300,13 +381,12 @@ def load_all_operasional() -> dict:
 
 
 def _ensure_lock_sheet():
-    sh = get_spreadsheet()
-    titles = {ws.title for ws in sh.worksheets()}
-    if LOCK_SHEET not in titles:
-        ws = sh.add_worksheet(title=LOCK_SHEET, rows=2, cols=2)
+    ws = _find_sheet(LOCK_SHEET)
+    if ws is None:
+        ws = get_spreadsheet().add_worksheet(title=LOCK_SHEET, rows=2, cols=2)
         ws.update([["token", "acquired_at"]], "A1")
-        return ws
-    return sh.worksheet(LOCK_SHEET)
+        _worksheets.clear()
+    return ws
 
 
 def _acquire_lock() -> str:
@@ -333,7 +413,9 @@ def _acquire_lock() -> str:
             row2 = ws.row_values(2)
             if row2 and row2[0] == token:
                 return token
-        time.sleep(random.uniform(0.2, 0.6))
+        # Cek tiap 1-2 detik, bukan 0,2-0,6: tiap cek = 1 request baca, dan
+        # menunggu 25 detik secepat itu bisa menghabiskan kuota baca semenit penuh.
+        time.sleep(random.uniform(1.0, 2.0))
     raise RuntimeError(
         "Sistem sedang sibuk (ada yang lain sedang edit/hapus data). "
         "Coba klik Simpan/Hapus lagi sebentar."
@@ -364,10 +446,12 @@ def _delete_session_rows(base_name: str, session_id: str) -> None:
 
     Sesi bisa ada di sheet bulan mana saja (data terpisah per bulan),
     jadi dicari di semua sheet punya base_name ini -- begitu ketemu,
-    langsung berhenti (satu sesi cuma pernah ditulis ke satu sheet)."""
+    langsung berhenti (satu sesi cuma pernah ditulis ke satu sheet).
+    Dicari dari bulan terbaru dulu: hapus/edit hampir selalu untuk data
+    bulan berjalan, dan tiap sheet yang dicari = 1 request baca."""
     token = _acquire_lock()
     try:
-        for ws in _data_sheets(base_name):
+        for ws in reversed(_data_sheets(base_name)):
             matches = ws.findall(session_id, in_column=1)
             if not matches:
                 continue
