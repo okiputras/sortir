@@ -75,6 +75,34 @@ OPERASIONAL_HEADER = [
     "Timestamp",
 ]
 
+# Kartu konsinyasi (barang titipan). Kunjungan supplier ikut dipisah per bulan
+# seperti Sortir; supplier & produknya dua tab master kecil yang tidak dipisah.
+KONSINYASI_HEADER = [
+    "Session ID",
+    "Tanggal",
+    "Cabang",
+    "Supplier ID",
+    "Supplier",
+    "Produk ID",
+    "Produk",
+    "Harga Titip",
+    "Stok Lama",
+    "Sisa",
+    "Terjual",
+    "Masuk",
+    "Stok Akhir",
+    "Bayar",
+    "Petugas",
+    "Disetujui Supplier",
+    "Status Bayar",
+    "Catatan",
+    "Timestamp",
+]
+KONS_SUPPLIER_SHEET = "Konsinyasi Supplier"
+KONS_SUPPLIER_HEADER = ["ID", "Nama Supplier", "No HP", "Sistem Bayar", "Aktif", "Dibuat"]
+KONS_PRODUK_SHEET = "Konsinyasi Produk"
+KONS_PRODUK_HEADER = ["ID", "Supplier ID", "Cabang", "Nama Produk", "Harga Titip", "Harga Jual", "Aktif", "Dibuat"]
+
 
 def _secrets_available() -> bool:
     # Mengakses st.secrets tanpa file secrets.toml sama sekali akan raise
@@ -322,6 +350,29 @@ def load_operasional():
     return _load_all_records("Pengeluaran Operasional")
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def load_konsinyasi():
+    return _load_all_records("Konsinyasi")
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def load_konsinyasi_master() -> dict:
+    """Tab "Konsinyasi Supplier" & "Konsinyasi Produk" dalam SATU request.
+    Tab yang belum ada (fitur belum pernah dipakai) dianggap kosong; tab itu
+    baru dibuat saat supplier/produk pertama disimpan. Keberadaan tab dicek
+    dari daftar tab tersimpan (_worksheets), jadi tidak menambah request."""
+    ada = {ws.title for ws in _worksheets()}
+    titles = [t for t in (KONS_SUPPLIER_SHEET, KONS_PRODUK_SHEET) if t in ada]
+    raw = dict(zip(titles, _batch_get_values(titles)))
+    # Supplier dibaca sebagai teks apa adanya, tanpa numericise: "0812..."
+    # akan jadi 812... (nol depan No HP hilang).
+    supplier_raw = fill_gaps(raw[KONS_SUPPLIER_SHEET]) if raw.get(KONS_SUPPLIER_SHEET) else []
+    return {
+        "supplier": to_records(supplier_raw[0], supplier_raw[1:]) if supplier_raw else [],
+        "produk": _to_records(raw.get(KONS_PRODUK_SHEET, [])),
+    }
+
+
 def _parallel_load(jobs: dict) -> dict:
     """Jalankan beberapa fungsi loader sekaligus secara paralel (bukan
     berurutan) supaya latency network per-request tidak menumpuk."""
@@ -376,6 +427,18 @@ def load_all_operasional() -> dict:
         {
             "cabang": load_cabang,
             "operasional": load_operasional,
+        }
+    )
+
+
+def load_all_konsinyasi() -> dict:
+    """Data untuk halaman Kartu Konsinyasi: Cabang/Karyawan/master/kunjungan."""
+    return _parallel_load(
+        {
+            "cabang": load_cabang,
+            "karyawan": load_karyawan,
+            "master": load_konsinyasi_master,
+            "kunjungan": load_konsinyasi,
         }
     )
 
@@ -520,3 +583,58 @@ def delete_operasional(session_id: str) -> None:
 def update_operasional(session_id: str, new_rows: list[dict]) -> None:
     delete_operasional(session_id)
     append_operasional(new_rows)
+
+
+def append_konsinyasi(rows: list[dict]) -> None:
+    _append_rows("Konsinyasi", KONSINYASI_HEADER, rows)
+    load_konsinyasi.clear()
+
+
+def delete_konsinyasi(session_id: str) -> None:
+    _delete_session_rows("Konsinyasi", session_id)
+    load_konsinyasi.clear()
+
+
+def update_konsinyasi(session_id: str, new_rows: list[dict]) -> None:
+    delete_konsinyasi(session_id)
+    append_konsinyasi(new_rows)
+
+
+_KONS_MASTER = {
+    "supplier": (KONS_SUPPLIER_SHEET, KONS_SUPPLIER_HEADER),
+    "produk": (KONS_PRODUK_SHEET, KONS_PRODUK_HEADER),
+}
+
+
+def _ensure_kons_master(jenis: str):
+    title, header = _KONS_MASTER[jenis]
+    ws = _find_sheet(title)
+    if ws is None:
+        ws = get_spreadsheet().add_worksheet(title=title, rows=200, cols=len(header))
+        ws.update([header], "A1")
+        _worksheets.clear()
+    return ws, header
+
+
+def tambah_konsinyasi_master(jenis: str, row: dict) -> None:
+    """Tambah satu supplier/produk di akhir tab master ("supplier"/"produk").
+    RAW, bukan USER_ENTERED: No HP "0812..." harus tetap teks, nol di depannya
+    tidak boleh hilang."""
+    ws, header = _ensure_kons_master(jenis)
+    ws.append_rows([[row.get(c, "") for c in header]], value_input_option="RAW")
+    load_konsinyasi_master.clear()
+
+
+def simpan_konsinyasi_master(jenis: str, rows: list[dict]) -> None:
+    """Tulis ulang isi tab master dari A1 dengan `rows` (semua baris, urutan
+    sama seperti saat dimuat). Sengaja tanpa clear(): baris master tidak
+    pernah dihapus -- yang tidak dipakai lagi cukup Aktif = Tidak -- jadi
+    menimpa dari A1 sudah cukup, dan kalau koneksi putus di tengah jalan
+    isinya tidak sempat terhapus dulu (lihat catatan backfill_penjualan di
+    CLAUDE.md)."""
+    ws, header = _ensure_kons_master(jenis)
+    values = [header] + [[r.get(c, "") for c in header] for r in rows]
+    if len(values) > ws.row_count:
+        ws.add_rows(len(values) - ws.row_count + 50)
+    ws.update(values, "A1", value_input_option="RAW")
+    load_konsinyasi_master.clear()

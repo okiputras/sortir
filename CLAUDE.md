@@ -13,7 +13,7 @@ A Streamlit app for Airin Fresh Mart, a 2-branch grocery/vegetable store (**SULF
 - One-time new-spreadsheet bootstrap: `python3 setup_gsheet.py` (creates the base tabs; see caveat under Data model)
 - Re-sync `PenjualanBulanan` from raw Kasir Pintar exports: `python3 backfill_penjualan.py` (add `--dry-run` to preview, `--cabang SULFAT|PIRANHA` to limit to one branch)
 - Deploy target is Railway (see `Procfile`); no separate build step.
-- There is no test suite, linter, or type checker configured in this repo.
+- Tests: only the consignment math has them. Run `python3 tests/test_konsinyasi.py`, or `pytest tests/` if pytest is installed; neither needs Google Sheets. No linter or type checker is configured.
 
 ## Credentials
 
@@ -32,12 +32,12 @@ All three are gitignored. For local dev, drop the two files in the repo root.
 
 ### Data layer: one Google Sheet, several access patterns
 
-`gsheet_client.py` owns the spreadsheet connection (`get_spreadsheet()`, cached via `st.cache_resource`) and generic CRUD for the three high-volume "transactional" tabs: `Sortir`, `Laporan Harian`, `Pengeluaran Operasional`.
+`gsheet_client.py` owns the spreadsheet connection (`get_spreadsheet()`, cached via `st.cache_resource`) and generic CRUD for the four high-volume "transactional" tabs: `Sortir`, `Laporan Harian`, `Pengeluaran Operasional`, `Konsinyasi`.
 
-- Each of those three **auto-splits by month**: writes always target `<Base>_MM_YYYY` (created on first write of a new month), while reads merge the legacy un-suffixed sheet (if one still exists from before this split existed) with every monthly sheet, chronologically (`_data_sheets`). This keeps any single sheet from growing unbounded.
+- Each of those four **auto-splits by month**: writes always target `<Base>_MM_YYYY` (created on first write of a new month), while reads merge the legacy un-suffixed sheet (if one still exists from before this split existed) with every monthly sheet, chronologically (`_data_sheets`). This keeps any single sheet from growing unbounded.
 - Deletes are physical (`deleteDimension`), not soft — protected by a single-cell lock in the `_Lock` tab (`_acquire_lock`/`_release_lock`) because deleting shifts row indices, and two concurrent deletes racing would otherwise corrupt each other. Rows are matched and removed by `Session ID`.
 - Bulk reads batch across every monthly sheet in one `values.batchGet` call (`_batch_get_records`) rather than one request per sheet, so the request count stays flat as monthly sheets accumulate.
-- `Produk`, `Cabang`, `Karyawan`, `ProdukMapping`, `PenjualanBulanan`, `_Lock` are **not** month-split and are read/written directly by whichever module owns them.
+- `Produk`, `Cabang`, `Karyawan`, `ProdukMapping`, `PenjualanBulanan`, `Konsinyasi Supplier`, `Konsinyasi Produk`, `_Lock` are **not** month-split and are read/written directly by whichever module owns them.
 - **Read quota.** Every app session *and* every local script share one service account, and Google caps it at ~60 read requests per minute. Going over that crashed pages with a 429 in production on 2026-11-08.
   - `_RetryHTTPClient` waits and retries 429s (and 5xx on GETs) for about a minute instead of crashing. `LOCK_TIMEOUT_SECONDS` must stay above that retry budget.
   - The worksheet list is cached (`_worksheets`, cleared when the app creates a tab).
@@ -51,6 +51,7 @@ All three are gitignored. For local dev, drop the two files in the repo root.
 - **Cabang** — the branch list (`SULFAT`, `PIRANHA`); every branch selector in the app reads from here.
 - **ProdukMapping** — manual `nama_barang_edit` → `nama_olshopin` overrides for products whose names don't fuzzy-match the live catalog automatically.
 - **PenjualanBulanan** — aggregated monthly sales history; owned entirely by `sales_history.py` (below).
+- **Konsinyasi Supplier** / **Konsinyasi Produk** — consignment suppliers and their products, per branch, with `Harga Titip`. These are created by the app on first save and maintained from the Kartu Konsinyasi page (below), not by hand.
 
 ### Olshopin integration (`olshopin_sync.py`)
 
@@ -76,11 +77,30 @@ Both features take `trend_avg_qty`'s trend value, add a safety buffer %, then ro
 
 `parse_transaksi()` reads the `TransaksiBarang` sheet from a Kasir Pintar `.xls` export — an old BIFF/OLE2 format that must be opened with `xlrd(ignore_workbook_corruption=True)`; `pandas.read_excel` fails on these files. The returned `HargaBeli`/`HargaJual` are the **real** prices recorded at sale time — this is the only source of true cost/margin in the whole app (as opposed to `olshopin_sync`'s fixed-markdown estimate above). `views/laporan_sortir.py` compares this against sortir records for real waste-vs-margin analysis; `views/update_harga.py`'s upload flow aggregates it into `PenjualanBulanan`.
 
+### Kartu Konsinyasi (`views/kartu_konsinyasi.py`, `konsinyasi.py`)
+
+The page replaces the paper consignment cards for goods suppliers leave on consignment (titipan). The math lives in `konsinyasi.py` (pure functions, no Streamlit/Sheets). The page file is deliberately *not* named `konsinyasi.py`, so that `import konsinyasi` can never resolve to the page.
+
+**How a visit is recorded.** Staff count what is left on the shelf **before** the new goods go up (`Sisa`), then record the new goods (`Masuk`). The page computes:
+- `Terjual = Stok lama − Sisa`
+- `Bayar = Terjual × Harga titip`
+- `Stok akhir = Sisa + Masuk`
+
+`Stok lama` is the previous visit's `Stok akhir` (`stok_terakhir`). This matches the paper formula `Terjual = (Stok lama + Masuk) − Sisa` when the paper's `Sisa` was counted *after* restocking, i.e. it equals `Stok akhir` here. A product's first visit has no `Stok lama`: it sells 0 and its count becomes the opening stock.
+
+**Rules that are easy to break:**
+- **Delete only the latest visit.** Each row stores its own `Stok Lama` snapshot, so deleting a middle visit breaks every later one. Staff can delete only today's visit; older ones need owner login.
+- **Paying is an update.** "Tandai sudah dibayar" rewrites the visit via delete + append and keeps the original `Timestamp`, so ordering stays intact.
+- **Master edits overwrite from A1** (`simpan_konsinyasi_master`), with no `clear()`. Master rows are never deleted; switch `Aktif` to `Tidak` instead. The page writes back *every* row in its original order, including rows without an ID, because skipping a row would shift the rest and leave duplicates.
+- **IDs carry a letter prefix.** Supplier IDs start with `S`, product IDs with `P`, because `numericise_all` turns IDs like `1e5…` into floats.
+- **Supplier rows stay text.** They are written with `RAW` and read back without numericise, so a phone number like `0812…` keeps its leading zero.
+
 ### Auth
 
 Two independent session-based gates (`st.session_state`, no real user accounts):
 - `ops_authenticated` (env vars `OPS_USERNAME`/`OPS_PASSWORD`, default `oki`/`oki`) gates **Update Harga**, **Pengeluaran Operasional**, **Laporan Sortir**, **Laporan Operasional** — owner-only, financial data.
 - **Input Sortir**, **Laporan Transaksi Harian**, **Jadwal Sayur Pagi/Siang** are open to all staff, no login.
+- **Kartu Konsinyasi** is open to all staff for recording visits. Owner login is needed for its "Kelola supplier & produk" tab, because `Harga Titip` decides what suppliers get paid, and for deleting a visit older than today.
 
 ### One-off scripts (not part of the running app)
 
