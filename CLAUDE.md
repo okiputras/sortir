@@ -30,7 +30,9 @@ All three are gitignored. For local dev, drop the two files in the repo root.
 
 `app.py` registers every page via `st.navigation()` pointing at `views/*.py`. Each view is a self-contained script (Streamlit's multipage model — Streamlit re-executes only the selected page top to bottom on each interaction, there's no shared router/class hierarchy). Read the docstring at the top of a view before changing it; most encode a non-obvious business rule (e.g. the cash-reconciliation formula in `laporan_transaksi_harian.py`, the login gate in `pengeluaran_operasional.py`).
 
-**Page layout is set only in `app.py`, and every page is `centered`.** Never call `st.set_page_config(layout=...)` inside a page. With two layout calls in one run, Streamlit's frontend sometimes drops one, and the page flips between wide and centered on clicks. A `wide` Kartu Konsinyasi was tried on 2026-11-13. On Streamlit 1.59.2 its card table, which sits inside a tab, then drew only its first column. Wide tables scroll horizontally instead.
+**Page layout is set only in `app.py`, and every page is `centered`.** Never call `st.set_page_config(layout=...)` inside a page. With two layout calls in one run, Streamlit's frontend sometimes drops one, and the page flips between wide and centered on clicks (Kartu Konsinyasi, 2026-11-13). To make one page wide, set the layout once per run in `app.py`, after `st.navigation()`, based on `pg.url_path`.
+
+**Tables inside `st.tabs` can render as a 52 px sliver** on Streamlit 1.59.2, in either layout. This happens when a table is first created while its tab is hidden, as seen on the Kartu and Rekap tabs of Kartu Konsinyasi on 2026-11-13. A table first created while visible stays fine, even after its tab is hidden and shown again. The likely fix, not applied yet: `st.tabs(..., key=..., on_change="rerun")`, and render tables only `if tab.open`.
 
 **Widget state does not survive a page switch.**
 - Streamlit drops the state of every widget that isn't rendered in a run. So when someone leaves a page and comes back, its selectboxes fall back to the first option: alphabetically, that is cabang `PIRANHA` and nama `Adi`.
