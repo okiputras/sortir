@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 
+import ingat_pilihan
 import konsinyasi as K
 from gsheet_client import (
     append_konsinyasi,
@@ -89,7 +90,12 @@ def nama_supplier(sid) -> str:
 if "kons_pesan" in st.session_state:
     st.success(st.session_state.pop("kons_pesan"))
 
-cabang = st.selectbox("Cabang", cabang_list, key="kons_cabang")
+# Cabang, tanggal & petugas lewat ingat_pilihan: tetap sama setelah pindah
+# halaman lalu kembali, dan cabang tidak diam-diam jatuh ke opsi pertama.
+cabang = ingat_pilihan.selectbox("Cabang", cabang_list, key="kons_cabang", index=None, placeholder="Pilih cabang")
+if not cabang:
+    st.info("Pilih cabang dulu.")
+    st.stop()
 produk_cabang = [p for p in produk_rows if p.get("Cabang") == cabang]
 stok = K.stok_terakhir(kunjungan, cabang)
 kunjungan_cabang = [r for r in kunjungan if r.get("Cabang") == cabang]
@@ -111,10 +117,12 @@ with tab_catat:
         )
     else:
         c1, c2 = st.columns(2)
-        tanggal = c1.date_input("Tanggal", value=sekarang().date(), key=f"kons_tgl_{versi}")
-        petugas = c2.selectbox(
-            "Petugas (kasir)", karyawan_list, index=None, placeholder="Pilih nama", key=f"kons_petugas_{versi}"
-        )
+        with c1:
+            tanggal = ingat_pilihan.date_input("Tanggal", key=f"kons_tgl_{versi}", nilai_awal=sekarang().date())
+        with c2:
+            petugas = ingat_pilihan.selectbox(
+                "Petugas (kasir)", karyawan_list, key=f"kons_petugas_{versi}", index=None, placeholder="Pilih nama"
+            )
         sid = st.selectbox(
             "Supplier yang datang", supplier_aktif, index=None, format_func=nama_supplier,
             placeholder="Pilih supplier", key=f"kons_supplier_{versi}",

@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 
+import ingat_pilihan
 from gsheet_client import (
     append_operasional,
     delete_operasional,
@@ -113,26 +114,28 @@ if not cabang_records:
 cabang_list = sorted({r["Nama Cabang"] for r in cabang_records if r.get("Nama Cabang")})
 
 # --- tanggal & cabang ---
+# Lewat ingat_pilihan supaya tetap sama setelah pindah halaman lalu kembali;
+# Cabang sengaja tanpa pilihan awal (lihat ingat_pilihan).
 col1, col2 = st.columns(2)
 with col1:
-    tanggal = st.date_input(
+    tanggal = ingat_pilihan.date_input(
         "Tanggal",
-        value=st.session_state.ops_tanggal,
         key=f"ops_tanggal_input_{st.session_state.ops_form_version}",
+        nilai_awal=st.session_state.ops_tanggal,
     )
 
 is_editing = bool(st.session_state.ops_editing_id)
 with col2:
-    cabang = st.selectbox(
-        "Cabang", cabang_list, disabled=is_editing, key="ops_cabang_select",
-        help="Batal edit dulu untuk ganti cabang." if is_editing else None,
+    cabang = ingat_pilihan.selectbox(
+        "Cabang", cabang_list, key="ops_cabang_select", index=None, placeholder="Pilih cabang",
+        disabled=is_editing, help="Batal edit dulu untuk ganti cabang." if is_editing else None,
     )
 
 st.divider()
 
 # --- history 2 sesi terakhir untuk cabang ini ---
 ops_df = pd.DataFrame(operasional_records) if operasional_records else pd.DataFrame()
-if not ops_df.empty:
+if not ops_df.empty and cabang:
     hist = ops_df[ops_df["Cabang"] == cabang]
 else:
     hist = pd.DataFrame()
@@ -169,8 +172,10 @@ if not hist.empty:
                     delete_operasional(sid)
                 st.success("Sesi berhasil dihapus.")
                 st.rerun()
-else:
+elif cabang:
     st.caption("Belum ada riwayat pengeluaran operasional untuk cabang ini.")
+else:
+    st.caption("Pilih cabang untuk melihat riwayat.")
 
 st.divider()
 
@@ -211,9 +216,13 @@ for _, row in edited.iterrows():
 
 if pengeluaran_rows:
     st.markdown(f"**Total: {format_rupiah(total)}**")
+    if cabang:
+        st.markdown(f"Disimpan untuk cabang **{cabang}**, tanggal **{tanggal.isoformat()}**")
+    else:
+        st.warning("Pilih **Cabang** di bagian atas dulu.")
 
 if st.button(
-    "Simpan", type="primary", width="stretch", disabled=not pengeluaran_rows
+    "Simpan", type="primary", width="stretch", disabled=not (pengeluaran_rows and cabang)
 ):
     now = datetime.now(JAKARTA)
     session_id = st.session_state.ops_editing_id or str(uuid.uuid4())

@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 
+import ingat_pilihan
 from gsheet_client import (
     append_laporan,
     delete_laporan,
@@ -135,31 +136,34 @@ cabang_list = sorted({r["Nama Cabang"] for r in cabang_records if r.get("Nama Ca
 karyawan_list = sorted({r["Nama Karyawan"] for r in karyawan_records if r.get("Nama Karyawan")})
 
 # --- tanggal, cabang, nama ---
+# Lewat ingat_pilihan supaya tetap sama setelah pindah halaman lalu kembali.
+# Cabang & Nama sengaja tanpa pilihan awal: opsi pertama (PIRANHA, Adi) dulu
+# ikut tersimpan kalau tidak diganti.
 col1, col2 = st.columns(2)
 with col1:
-    tanggal = st.date_input(
+    tanggal = ingat_pilihan.date_input(
         "Tanggal",
-        value=st.session_state.lap_tanggal,
         key=f"lap_tanggal_input_{st.session_state.lap_form_version}",
+        nilai_awal=st.session_state.lap_tanggal,
     )
 
 is_editing = bool(st.session_state.lap_editing_id)
 with col2:
-    cabang = st.selectbox(
-        "Cabang", cabang_list, disabled=is_editing, key="lap_cabang_select",
-        help="Batal edit dulu untuk ganti cabang." if is_editing else None,
+    cabang = ingat_pilihan.selectbox(
+        "Cabang", cabang_list, key="lap_cabang_select", index=None, placeholder="Pilih cabang",
+        disabled=is_editing, help="Batal edit dulu untuk ganti cabang." if is_editing else None,
     )
 
-nama = st.selectbox(
-    "Nama", karyawan_list, disabled=is_editing, key="lap_nama_select",
-    help="Batal edit dulu untuk ganti nama." if is_editing else None,
+nama = ingat_pilihan.selectbox(
+    "Nama", karyawan_list, key="lap_nama_select", index=None, placeholder="Pilih nama",
+    disabled=is_editing, help="Batal edit dulu untuk ganti nama." if is_editing else None,
 )
 
 st.divider()
 
 # --- history 2 sesi terakhir ---
 laporan_df = pd.DataFrame(laporan_records) if laporan_records else pd.DataFrame()
-if not laporan_df.empty:
+if not laporan_df.empty and cabang and nama:
     hist = laporan_df[(laporan_df["Nama"] == nama) & (laporan_df["Cabang"] == cabang)]
 else:
     hist = pd.DataFrame()
@@ -230,8 +234,10 @@ if not hist.empty:
                     delete_laporan(sid)
                 st.success("Sesi berhasil dihapus.")
                 st.rerun()
-else:
+elif cabang and nama:
     st.caption("Belum ada riwayat laporan untuk kombinasi nama & cabang ini.")
+else:
+    st.caption("Pilih cabang & nama untuk melihat riwayat.")
 
 st.divider()
 
@@ -313,7 +319,12 @@ st.divider()
 st.markdown(f"### Total: {format_rupiah(total)}")
 st.caption(f"Rumus: {rumus_text}")
 
-if st.button("Simpan", type="primary", width="stretch"):
+if cabang and nama:
+    st.markdown(f"Disimpan sebagai **{nama} · {cabang}**, tanggal **{tanggal.isoformat()}**")
+else:
+    st.warning("Pilih **Cabang** dan **Nama** di bagian atas dulu.")
+
+if st.button("Simpan", type="primary", width="stretch", disabled=not (cabang and nama)):
     now = datetime.now(JAKARTA)
     session_id = st.session_state.lap_editing_id or str(uuid.uuid4())
 

@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 
+import ingat_pilihan
 from gsheet_client import (
     append_session,
     delete_session,
@@ -85,23 +86,26 @@ produk_names = sorted(produk_df["nama_barang_edit"].unique().tolist())
 produk_lookup = dict(zip(produk_df["nama_barang_edit"], produk_df["harga_beli_edit"]))
 
 # --- form utama: tanggal, cabang, nama ---
+# Lewat ingat_pilihan supaya tetap sama setelah pindah halaman lalu kembali.
+# Cabang & Nama sengaja tanpa pilihan awal: opsi pertama (PIRANHA, Adi) dulu
+# ikut tersimpan kalau tidak diganti.
 col1, col2 = st.columns(2)
 with col1:
-    tanggal = st.date_input(
+    tanggal = ingat_pilihan.date_input(
         "Tanggal",
-        value=st.session_state.form_tanggal,
         key=f"tanggal_input_{st.session_state.form_version}",
+        nilai_awal=st.session_state.form_tanggal,
     )
 is_editing = bool(st.session_state.editing_session_id)
 with col2:
-    cabang = st.selectbox(
-        "Cabang", cabang_list, disabled=is_editing, key="cabang_select",
-        help="Batal edit dulu untuk ganti cabang." if is_editing else None,
+    cabang = ingat_pilihan.selectbox(
+        "Cabang", cabang_list, key="cabang_select", index=None, placeholder="Pilih cabang",
+        disabled=is_editing, help="Batal edit dulu untuk ganti cabang." if is_editing else None,
     )
 
-nama = st.selectbox(
-    "Nama Karyawan", karyawan_list, disabled=is_editing, key="nama_select",
-    help="Batal edit dulu untuk ganti nama karyawan." if is_editing else None,
+nama = ingat_pilihan.selectbox(
+    "Nama Karyawan", karyawan_list, key="nama_select", index=None, placeholder="Pilih nama",
+    disabled=is_editing, help="Batal edit dulu untuk ganti nama karyawan." if is_editing else None,
 )
 
 st.divider()
@@ -109,7 +113,7 @@ st.divider()
 # --- history 2 sesi terakhir untuk nama+cabang ini ---
 sortir_df = pd.DataFrame(sortir_records) if sortir_records else pd.DataFrame()
 
-if not sortir_df.empty:
+if not sortir_df.empty and cabang and nama:
     hist = sortir_df[(sortir_df["Nama Karyawan"] == nama) & (sortir_df["Cabang"] == cabang)]
 else:
     hist = pd.DataFrame()
@@ -148,8 +152,10 @@ if not hist.empty:
                     delete_session(sid)
                 st.success("Sesi berhasil dihapus.")
                 st.rerun()
-else:
+elif cabang and nama:
     st.caption("Belum ada riwayat sortir untuk kombinasi nama & cabang ini.")
+else:
+    st.caption("Pilih cabang & nama untuk melihat riwayat.")
 
 st.divider()
 
@@ -208,8 +214,12 @@ if preview_rows:
         },
     )
     st.markdown(f"**Total: {format_rupiah(total)}**")
+    if cabang and nama:
+        st.markdown(f"Disimpan sebagai **{nama} · {cabang}**, tanggal **{tanggal.isoformat()}**")
+    else:
+        st.warning("Pilih **Cabang** dan **Nama Karyawan** di bagian atas dulu.")
 
-if st.button("Simpan", type="primary", disabled=not preview_rows, width="stretch"):
+if st.button("Simpan", type="primary", disabled=not (preview_rows and cabang and nama), width="stretch"):
     now = datetime.now(JAKARTA)
     session_id = st.session_state.editing_session_id or str(uuid.uuid4())
 

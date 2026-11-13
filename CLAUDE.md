@@ -30,6 +30,15 @@ All three are gitignored. For local dev, drop the two files in the repo root.
 
 `app.py` registers every page via `st.navigation()` pointing at `views/*.py`. Each view is a self-contained script (Streamlit's multipage model — Streamlit re-executes only the selected page top to bottom on each interaction, there's no shared router/class hierarchy). Read the docstring at the top of a view before changing it; most encode a non-obvious business rule (e.g. the cash-reconciliation formula in `laporan_transaksi_harian.py`, the login gate in `pengeluaran_operasional.py`).
 
+**Widget state does not survive a page switch.**
+- Streamlit drops the state of every widget that isn't rendered in a run. So when someone leaves a page and comes back, its selectboxes fall back to the first option: alphabetically, that is cabang `PIRANHA` and nama `Adi`.
+- Values kept in plain `session_state` keys survive, such as the amounts in Laporan Transaksi Harian.
+- Together, this saved two SULFAT reports as "Adi · PIRANHA" on 2026-11-09 without anyone noticing.
+
+Every page that writes a Cabang, Nama or Tanggal therefore follows two rules:
+- It uses `ingat_pilihan.selectbox` and `ingat_pilihan.date_input`, which put the last value back.
+- Cabang and Nama start with no selection (`index=None`), and Simpan stays disabled until both are chosen. Nothing gets saved under a default the user never picked.
+
 ### Data layer: one Google Sheet, several access patterns
 
 `gsheet_client.py` owns the spreadsheet connection (`get_spreadsheet()`, cached via `st.cache_resource`) and generic CRUD for the four high-volume "transactional" tabs: `Sortir`, `Laporan Harian`, `Pengeluaran Operasional`, `Konsinyasi`.
