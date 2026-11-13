@@ -88,9 +88,12 @@ The page replaces the paper consignment cards for goods suppliers leave on consi
 
 `Stok lama` is the previous visit's `Stok akhir` (`stok_terakhir`). This matches the paper formula `Terjual = (Stok lama + Masuk) − Sisa` when the paper's `Sisa` was counted *after* restocking, i.e. it equals `Stok akhir` here. A product's first visit has no `Stok lama`: it sells 0 and its count becomes the opening stock.
 
+**Unpaid bills pile up.** Some suppliers prefer to collect only after several visits. "Sisa Tagihan" is the running total owed to a supplier: it is a payable for Airin (a receivable, *piutang*, for the supplier). It is always computed from the visit rows, never stored. The functions are `sisa_tagihan_berjalan`, `belum_dibayar` and `tagihan_per_supplier`. Zero-amount visits, such as a product's first visit, never count as a bill.
+
 **Rules that are easy to break:**
 - **Delete only the latest visit.** Each row stores its own `Stok Lama` snapshot, so deleting a middle visit breaks every later one. Staff can delete only today's visit; older ones need owner login.
-- **Paying is an update.** "Tandai sudah dibayar" rewrites the visit via delete + append and keeps the original `Timestamp`, so ordering stays intact.
+- **Paying edits cells in place.** `bayar_konsinyasi` sets `Status Bayar` and `Tanggal Bayar` on the rows of the chosen visits; it does not delete and re-append them. Several accumulated visits can therefore be settled at once, with row order and `Timestamp` unchanged. It still holds the `_Lock`, because a concurrent delete shifts row numbers.
+- **New log columns go at the end only.** `Tanggal Bayar` was added after launch as the last column. Monthly tabs created earlier have 19 columns, and `_pastikan_header_konsinyasi` extends their header in place the first time the app saves or pays into them. Add any future column the same way: at the end, never in the middle.
 - **Master edits overwrite from A1** (`simpan_konsinyasi_master`), with no `clear()`. Master rows are never deleted; switch `Aktif` to `Tidak` instead. The page writes back *every* row in its original order, including rows without an ID, because skipping a row would shift the rest and leave duplicates.
 - **IDs carry a letter prefix.** Supplier IDs start with `S`, product IDs with `P`, because `numericise_all` turns IDs like `1e5…` into floats.
 - **Supplier rows stay text.** They are written with `RAW` and read back without numericise, so a phone number like `0812…` keeps its leading zero.

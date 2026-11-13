@@ -97,6 +97,11 @@ KONSINYASI_HEADER = [
     "Status Bayar",
     "Catatan",
     "Timestamp",
+    # Ditambahkan sesudah fitur dipakai (13 Nov 2026), sengaja di PALING
+    # BELAKANG: tab bulanan yang dibuat sebelumnya cuma punya 19 kolom, dan
+    # _pastikan_header_konsinyasi menambahkan kolom ini di ujung tanpa
+    # menggeser kolom lain.
+    "Tanggal Bayar",
 ]
 KONS_SUPPLIER_SHEET = "Konsinyasi Supplier"
 KONS_SUPPLIER_HEADER = ["ID", "Nama Supplier", "No HP", "Sistem Bayar", "Aktif", "Dibuat"]
@@ -585,7 +590,31 @@ def update_operasional(session_id: str, new_rows: list[dict]) -> None:
     append_operasional(new_rows)
 
 
+_header_kons_ok: set = set()  # tab bulanan yang header-nya sudah dicek di proses ini
+
+
+def _pastikan_header_konsinyasi(ws) -> list:
+    """Header tab bulanan Konsinyasi, dilengkapi dulu kalau masih versi lama
+    (tanpa kolom yang ditambahkan belakangan, mis. "Tanggal Bayar"). Hanya
+    menambah di ujung kanan, dan hanya kalau header lamanya persis awal dari
+    KONSINYASI_HEADER -- header yang diubah orang tidak disentuh. Dicek sekali
+    per tab per proses (1 request baca)."""
+    if ws.title in _header_kons_ok:
+        return KONSINYASI_HEADER
+    header = ws.row_values(1)
+    if len(header) < len(KONSINYASI_HEADER) and header == KONSINYASI_HEADER[: len(header)]:
+        if ws.col_count < len(KONSINYASI_HEADER):
+            ws.add_cols(len(KONSINYASI_HEADER) - ws.col_count)
+        ws.update([KONSINYASI_HEADER], "A1")
+        header = list(KONSINYASI_HEADER)
+    if header == KONSINYASI_HEADER:
+        _header_kons_ok.add(ws.title)
+    return header
+
+
 def append_konsinyasi(rows: list[dict]) -> None:
+    ws = _ensure_monthly_sheet("Konsinyasi", KONSINYASI_HEADER, datetime.now(JAKARTA))
+    _pastikan_header_konsinyasi(ws)
     _append_rows("Konsinyasi", KONSINYASI_HEADER, rows)
     load_konsinyasi.clear()
 
@@ -595,9 +624,37 @@ def delete_konsinyasi(session_id: str) -> None:
     load_konsinyasi.clear()
 
 
-def update_konsinyasi(session_id: str, new_rows: list[dict]) -> None:
-    delete_konsinyasi(session_id)
-    append_konsinyasi(new_rows)
+def bayar_konsinyasi(session_ids: list, status: str, tanggal_bayar: str) -> int:
+    """Tandai kunjungan-kunjungan ini sudah dibayar: ubah sel "Status Bayar" &
+    "Tanggal Bayar" di barisnya sendiri. Barisnya tidak dihapus lalu ditulis
+    ulang, jadi urutan & Timestamp tetap, dan banyak kunjungan (tagihan yang
+    menumpuk) bisa dilunasi sekaligus. Tetap pakai lock: hapus kunjungan dari
+    user lain menggeser nomor baris yang sudah dicari. Balikan: jumlah baris
+    yang diubah."""
+    sisa = {str(s) for s in session_ids}
+    diubah = 0
+    token = _acquire_lock()
+    try:
+        for ws in reversed(_data_sheets("Konsinyasi")):
+            if not sisa:
+                break
+            kolom_a = ws.col_values(1)
+            baris = [i + 1 for i, v in enumerate(kolom_a) if i > 0 and v in sisa]
+            if not baris:
+                continue
+            header = _pastikan_header_konsinyasi(ws)
+            updates = []
+            for nama, nilai in (("Status Bayar", status), ("Tanggal Bayar", tanggal_bayar)):
+                if nama in header:
+                    kolom = header.index(nama) + 1
+                    updates += [{"range": gspread.utils.rowcol_to_a1(r, kolom), "values": [[nilai]]} for r in baris]
+            ws.batch_update(updates, value_input_option="USER_ENTERED")
+            diubah += len(baris)
+            sisa -= {kolom_a[r - 1] for r in baris}
+    finally:
+        _release_lock(token)
+    load_konsinyasi.clear()
+    return diubah
 
 
 _KONS_MASTER = {

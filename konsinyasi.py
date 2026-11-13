@@ -123,6 +123,60 @@ def sesi_terakhir(kunjungan: list, cabang: str, supplier_id: str):
     return urut(milik)[-1]["Session ID"] if milik else None
 
 
+def belum_lunas(row: dict) -> bool:
+    return str(row.get("Status Bayar", "")).strip().lower().startswith("belum")
+
+
+def per_sesi(kunjungan: list) -> list:
+    """Satu ringkasan per kunjungan (Session ID), urut dari yang paling lama:
+    Bayar = jumlah semua produk di kunjungan itu."""
+    sesi = {}
+    for r in urut(kunjungan):
+        s = sesi.setdefault(r["Session ID"], {
+            "Session ID": r["Session ID"], "Tanggal": r.get("Tanggal"), "Timestamp": r.get("Timestamp"),
+            "Supplier ID": str(r.get("Supplier ID") or ""), "Supplier": r.get("Supplier") or "-",
+            "Petugas": r.get("Petugas") or "-", "Bayar": 0.0, "Belum": belum_lunas(r),
+            "Status Bayar": r.get("Status Bayar") or "", "Tanggal Bayar": r.get("Tanggal Bayar") or "",
+        })
+        s["Bayar"] += angka(r.get("Bayar")) or 0.0
+    return list(sesi.values())
+
+
+def tagihan(sesi: dict) -> float:
+    """Uang yang masih harus dibayar dari satu kunjungan (0 kalau sudah dibayar)."""
+    return sesi["Bayar"] if sesi["Belum"] and sesi["Bayar"] > 0 else 0.0
+
+
+def sisa_tagihan_berjalan(kunjungan: list) -> dict:
+    """{Session ID: total tagihan belum dibayar sampai dengan kunjungan itu},
+    berjalan dari kunjungan paling lama. Kunjungan terakhir = sisa tagihan
+    sekarang. Kunjungan yang sudah dibayar tidak menambah sisa."""
+    jalan, hasil = 0.0, {}
+    for s in per_sesi(kunjungan):
+        jalan += tagihan(s)
+        hasil[s["Session ID"]] = jalan
+    return hasil
+
+
+def belum_dibayar(kunjungan: list, cabang: str, supplier_id: str) -> list:
+    """Kunjungan supplier ini di cabang ini yang tagihannya belum dibayar
+    (Bayar > 0), urut dari yang paling lama."""
+    milik = [r for r in kunjungan if r.get("Cabang") == cabang and str(r.get("Supplier ID")) == str(supplier_id)]
+    return [s for s in per_sesi(milik) if tagihan(s) > 0]
+
+
+def tagihan_per_supplier(kunjungan: list, cabang: str) -> list:
+    """Sisa tagihan tiap supplier di cabang ini, dari semua bulan."""
+    per = {}
+    for s in per_sesi([r for r in kunjungan if r.get("Cabang") == cabang]):
+        if tagihan(s) <= 0:
+            continue
+        t = per.setdefault(s["Supplier ID"], {"Supplier": s["Supplier"], "Kunjungan": 0, "Sisa Tagihan": 0.0, "Sejak": s["Tanggal"]})
+        t["Kunjungan"] += 1
+        t["Sisa Tagihan"] += tagihan(s)
+    return sorted(per.values(), key=lambda t: -t["Sisa Tagihan"])
+
+
 def rekap(kunjungan: list, cabang: str, bulan: str) -> list:
     """Ringkasan per supplier untuk cabang & bulan "YYYY-MM"."""
     per = {}

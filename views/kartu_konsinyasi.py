@@ -27,11 +27,11 @@ import streamlit as st
 import konsinyasi as K
 from gsheet_client import (
     append_konsinyasi,
+    bayar_konsinyasi,
     delete_konsinyasi,
     load_all_konsinyasi,
     simpan_konsinyasi_master,
     tambah_konsinyasi_master,
-    update_konsinyasi,
 )
 
 JAKARTA = ZoneInfo("Asia/Jakarta")
@@ -135,6 +135,13 @@ with tab_catat:
                 )
                 if K.kunci_waktu(tanggal.isoformat(), "")[:3] < K.kunci_waktu(rows_t[0]["Tanggal"], "")[:3]:
                     st.warning("Tanggal ini lebih awal dari kunjungan terakhir. Stok lama tetap diambil dari kunjungan terakhir.")
+            utang = K.belum_dibayar(kunjungan, cabang, sid)
+            utang_total = sum(K.tagihan(s) for s in utang)
+            if utang:
+                st.warning(
+                    f"Tagihan belum dibayar ke {nama_supplier(sid)}: **{rupiah(utang_total)}** dari {len(utang)} "
+                    f"kunjungan (sejak {utang[0]['Tanggal']}). Untuk melunasinya, buka tab **Kartu per supplier**."
+                )
 
             items = sorted([p for p in produk_aktif if str(p["Supplier ID"]) == sid], key=lambda p: str(p["Nama Produk"]))
             st.caption(
@@ -209,7 +216,7 @@ with tab_catat:
                     column_config={"Bayar": RUPIAH},
                 )
                 total = sum(b["bayar"] for b in isi)
-                st.markdown(f"**Dibayar ke supplier: {rupiah(total)}**")
+                st.markdown(f"**Tagihan kunjungan ini: {rupiah(total)}**")
                 if any(b["stok_lama"] is None for b in isi):
                     st.caption("Produk tanpa stok lama dihitung sebagai kunjungan pertama: sisanya dianggap stok awal, belum ada yang dibayar.")
 
@@ -217,6 +224,13 @@ with tab_catat:
                 status = st.radio(
                     "Pembayaran", K.STATUS_BAYAR, index=2 if tunda else 0, horizontal=True, key=f"kons_status_{versi}"
                 )
+                if status.startswith("Belum") and total > 0:
+                    st.caption(f"Sisa tagihan ke supplier ini setelah kunjungan ini: **{rupiah(utang_total + total)}**.")
+                elif utang_total:
+                    st.caption(
+                        f"Yang dibayar sekarang hanya kunjungan ini ({rupiah(total)}). "
+                        f"Tagihan sebelumnya tetap {rupiah(utang_total)}."
+                    )
                 setuju = st.checkbox("Supplier sudah melihat jumlah ini dan setuju", key=f"kons_setuju_{versi}")
                 catatan = st.text_input("Catatan (opsional)", key=f"kons_catatan_{versi}")
                 kurang = [t for t, ok in (("pilih nama petugas", petugas), ("centang persetujuan supplier", setuju)) if not ok]
@@ -246,6 +260,7 @@ with tab_catat:
                             "Status Bayar": status,
                             "Catatan": catatan.strip(),
                             "Timestamp": waktu,
+                            "Tanggal Bayar": "" if status.startswith("Belum") else tanggal.isoformat(),
                         }
                         for b in isi
                     ]
@@ -280,29 +295,62 @@ with tab_kartu:
             # angka: samakan jadi angka supaya tabelnya tidak campur teks/angka.
             for c in ("Stok Lama", "Sisa", "Terjual", "Masuk", "Stok Akhir", "Bayar"):
                 kartu[c] = pd.to_numeric(kartu[c], errors="coerce")
-            st.dataframe(kartu, hide_index=True, width="stretch", column_config={"Bayar": RUPIAH})
-            total_bayar = sum(K.angka(r.get("Bayar")) or 0 for r in tampil)
-            belum = sum(K.angka(r.get("Bayar")) or 0 for r in tampil if str(r.get("Status Bayar", "")).startswith("Belum"))
+            kartu["Status Bayar"] = [
+                f"{r.get('Status Bayar')} ({r.get('Tanggal Bayar')})"
+                if r.get("Tanggal Bayar") and not K.belum_lunas(r) and str(r.get("Tanggal Bayar")) != str(r.get("Tanggal"))
+                else r.get("Status Bayar")
+                for r in tampil
+            ]
+            # Sisa Tagihan berjalan: diisi di baris terakhir tiap kunjungan saja
+            # (satu kunjungan bisa beberapa produk = beberapa baris).
+            berjalan = K.sisa_tagihan_berjalan(tampil)
+            baris_akhir = {r["Session ID"]: i for i, r in enumerate(tampil)}
+            kartu["Sisa Tagihan"] = [
+                berjalan[r["Session ID"]] if baris_akhir[r["Session ID"]] == i else None for i, r in enumerate(tampil)
+            ]
+            st.dataframe(
+                kartu,
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "Bayar": RUPIAH,
+                    "Sisa Tagihan": st.column_config.NumberColumn(
+                        format="Rp %,d",
+                        help="Total yang belum dibayar ke supplier sampai kunjungan ini (utang Airin ke supplier).",
+                    ),
+                },
+            )
+            utang = K.belum_dibayar(kunjungan, cabang, sid_k)
+            utang_total = sum(K.tagihan(s) for s in utang)
             st.markdown(
                 f"Terjual **{sum(K.angka(r.get('Terjual')) or 0 for r in tampil):g}** · "
-                f"bayar **{rupiah(total_bayar)}** · belum dibayar **{rupiah(belum)}**"
+                f"total tagihan **{rupiah(sum(K.angka(r.get('Bayar')) or 0 for r in tampil))}** · "
+                f"sisa tagihan sekarang **{rupiah(utang_total)}**"
+                + (f" dari {len(utang)} kunjungan (sejak {utang[0]['Tanggal']})" if utang else "")
             )
+            if produk_k != "Semua produk":
+                st.caption("Kolom Sisa Tagihan di tabel hanya menghitung produk ini; sisa tagihan sekarang menghitung semua produk supplier ini.")
 
-            sesi_belum = []
-            for r in reversed(milik):
-                if str(r.get("Status Bayar", "")).startswith("Belum") and r["Session ID"] not in sesi_belum:
-                    sesi_belum.append(r["Session ID"])
-            if sesi_belum:
-                st.subheader("Belum dibayar")
-                for sesi in sesi_belum[:10]:
-                    rows_s = [r for r in milik if r["Session ID"] == sesi]
-                    with st.expander(f"{rows_s[0]['Tanggal']} · {rupiah(sum(K.angka(r.get('Bayar')) or 0 for r in rows_s))}"):
-                        cara = st.radio("Dibayar dengan", K.STATUS_BAYAR[:2], horizontal=True, key=f"kons_cara_{sesi}")
-                        if st.button("Tandai sudah dibayar", key=f"kons_lunas_{sesi}"):
-                            with st.spinner("Menyimpan..."):
-                                update_konsinyasi(sesi, [{**r, "Status Bayar": cara} for r in rows_s])
-                            st.session_state.kons_pesan = f"Kunjungan {rows_s[0]['Tanggal']} ditandai {cara.lower()}."
-                            st.rerun()
+            if utang:
+                st.subheader("Bayar tagihan")
+                label = {s["Session ID"]: f"{s['Tanggal']} · {rupiah(K.tagihan(s))} · {s['Petugas']}" for s in utang}
+                dipilih = st.multiselect(
+                    "Kunjungan yang dibayar", list(label), default=list(label), format_func=label.get,
+                    key=f"kons_pilih_bayar_{sid_k}_{versi}",
+                )
+                c1, c2 = st.columns(2)
+                cara = c1.radio("Dibayar dengan", K.STATUS_BAYAR[:2], horizontal=True, key=f"kons_cara_{sid_k}")
+                tgl_bayar = c2.date_input("Tanggal bayar", value=sekarang().date(), key=f"kons_tgl_bayar_{sid_k}_{versi}")
+                jumlah = sum(K.tagihan(s) for s in utang if s["Session ID"] in dipilih)
+                if st.button(f"Tandai dibayar · {rupiah(jumlah)}", type="primary", disabled=not dipilih, key=f"kons_bayar_{sid_k}"):
+                    with st.spinner("Menyimpan..."):
+                        bayar_konsinyasi(dipilih, cara, tgl_bayar.isoformat())
+                    st.session_state.kons_pesan = (
+                        f"{len(dipilih)} kunjungan {nama_supplier(sid_k)} ditandai {cara.lower()}: {rupiah(jumlah)}."
+                    )
+                    st.session_state.kons_versi += 1
+                    st.rerun()
+                st.caption("Dibayar per kunjungan (semua produk di kunjungan itu). Kalau baru dibayar sebagian, pilih kunjungan yang paling lama dulu.")
 
             terakhir = K.sesi_terakhir(kunjungan, cabang, sid_k)
             rows_t = [r for r in milik if r["Session ID"] == terakhir]
@@ -326,6 +374,24 @@ with tab_kartu:
 
 # =========================================================== Rekap bulanan
 with tab_rekap:
+    st.subheader("Sisa tagihan ke supplier")
+    daftar_tagihan = K.tagihan_per_supplier(kunjungan, cabang)
+    if not daftar_tagihan:
+        st.caption("Tidak ada tagihan yang belum dibayar.")
+    else:
+        st.dataframe(
+            pd.DataFrame(daftar_tagihan)[["Supplier", "Kunjungan", "Sisa Tagihan", "Sejak"]],
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "Kunjungan": st.column_config.NumberColumn(help="Jumlah kunjungan yang belum dibayar."),
+                "Sisa Tagihan": RUPIAH,
+                "Sejak": st.column_config.TextColumn(help="Tanggal kunjungan tertua yang belum dibayar."),
+            },
+        )
+        st.markdown(f"Total sisa tagihan (semua bulan): **{rupiah(sum(t['Sisa Tagihan'] for t in daftar_tagihan))}**")
+
+    st.subheader("Rekap per bulan")
     bulan_ada = {sekarang().strftime("%Y-%m")}
     for r in kunjungan_cabang:
         k = K.kunci_waktu(r.get("Tanggal"), r.get("Timestamp"))

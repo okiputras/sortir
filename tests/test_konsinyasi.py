@@ -74,6 +74,26 @@ def test_stok_terakhir_sesi_terakhir_dan_rekap():
     assert (r["Kunjungan"], r["Terjual"], r["Bayar"], r["Belum dibayar"], r["Sudah dibayar"]) == (3, 13.0, 32500.0, 30000.0, 2500.0)
 
 
+def test_tagihan_menumpuk_dan_sisa_tagihan_berjalan():
+    # seperti data uji di produksi: 1 kunjungan pertama (Rp0, "belum"), 2 lunas, 2 belum
+    data = [
+        _kunjungan("k1", "2026-11-11", "11:06:05", 20, 0, 0, "Belum dibayar"),
+        _kunjungan("k2", "2026-11-11", "11:08:09", 40, 20, 50000, "Dibayar tunai"),
+        _kunjungan("k3", "2026-11-11", "14:05:01", 43, 37, 92500, "Dibayar tunai"),
+        _kunjungan("k4", "2026-11-11", "14:05:36", 42, 41, 102500, "Belum dibayar"),
+        _kunjungan("k5", "2026-11-11", "14:06:02", 46, 36, 90000, "Belum dibayar"),
+    ]
+    data.append({**data[3], "Produk ID": "P2", "Bayar": 7500})  # produk kedua di kunjungan k4
+    assert K.sisa_tagihan_berjalan(data) == {"k1": 0.0, "k2": 0.0, "k3": 0.0, "k4": 110000.0, "k5": 200000.0}
+    belum = K.belum_dibayar(data, "SULFAT", "S1")  # kunjungan Rp0 tidak dihitung sebagai tagihan
+    assert [s["Session ID"] for s in belum] == ["k4", "k5"] and [s["Bayar"] for s in belum] == [110000.0, 90000.0]
+    assert K.tagihan_per_supplier(data, "SULFAT") == [{"Supplier": "Bu Sri", "Kunjungan": 2, "Sisa Tagihan": 200000.0, "Sejak": "2026-11-11"}]
+    assert K.tagihan_per_supplier(data, "PIRANHA") == []
+    lunas = [{**r, "Status Bayar": "Dibayar transfer"} if r["Session ID"] == "k4" else r for r in data]
+    assert K.sisa_tagihan_berjalan(lunas)["k5"] == 90000.0
+    assert K.belum_lunas({"Status Bayar": "belum dibayar"}) and not K.belum_lunas({"Status Bayar": "Dibayar tunai"})
+
+
 def test_angka_dari_sel():
     assert K.angka("2,5") == 2.5 and K.angka("12") == 12.0 and K.angka(7) == 7.0
     assert K.angka("") is None and K.angka(None) is None and K.angka(float("nan")) is None and K.angka("abc") is None
