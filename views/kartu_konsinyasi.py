@@ -40,7 +40,7 @@ AUTH_USERNAME = os.environ.get("OPS_USERNAME", "oki")
 AUTH_PASSWORD = os.environ.get("OPS_PASSWORD", "oki")
 RUPIAH = st.column_config.NumberColumn(format="Rp %,d")
 
-st.title("🤝 Kartu Konsinyasi")  # layout lebar diatur di app.py (HALAMAN_LEBAR)
+st.title("🤝 Kartu Konsinyasi")
 
 
 def rupiah(value) -> str:
