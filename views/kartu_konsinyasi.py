@@ -40,6 +40,9 @@ AUTH_USERNAME = os.environ.get("OPS_USERNAME", "oki")
 AUTH_PASSWORD = os.environ.get("OPS_PASSWORD", "oki")
 RUPIAH = st.column_config.NumberColumn(format="Rp %,d")
 
+# Tabel kartu punya 11 kolom; di layout "centered" (app.py) kolom paling kanan,
+# Sisa Tagihan, baru terlihat kalau tabelnya digeser.
+st.set_page_config(layout="wide")
 st.title("🤝 Kartu Konsinyasi")
 
 
@@ -316,6 +319,7 @@ with tab_kartu:
             kartu["Sisa Tagihan"] = [
                 berjalan[r["Session ID"]] if baris_akhir[r["Session ID"]] == i else None for i, r in enumerate(tampil)
             ]
+            kartu["Petugas"] = kartu.pop("Petugas")  # paling kanan: Sisa Tagihan tepat di kanan Status Bayar
             st.dataframe(
                 kartu,
                 hide_index=True,
