@@ -40,10 +40,7 @@ AUTH_USERNAME = os.environ.get("OPS_USERNAME", "oki")
 AUTH_PASSWORD = os.environ.get("OPS_PASSWORD", "oki")
 RUPIAH = st.column_config.NumberColumn(format="Rp %,d")
 
-# Tabel kartu punya 11 kolom; di layout "centered" (app.py) kolom paling kanan,
-# Sisa Tagihan, baru terlihat kalau tabelnya digeser.
-st.set_page_config(layout="wide")
-st.title("🤝 Kartu Konsinyasi")
+st.title("🤝 Kartu Konsinyasi")  # layout lebar diatur di app.py (HALAMAN_LEBAR)
 
 
 def rupiah(value) -> str:

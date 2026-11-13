@@ -9,7 +9,8 @@ Jalankan:
 
 import streamlit as st
 
-st.set_page_config(page_title="Toko Sayur", page_icon="🥬", layout="centered")
+# Layout diatur sekali saja per run, di bawah, sesudah halamannya diketahui.
+st.set_page_config(page_title="Toko Sayur", page_icon="🥬")
 
 pg = st.navigation(
     [
@@ -32,4 +33,10 @@ pg = st.navigation(
         st.Page("views/update_harga.py", title="Update Harga (Olshopin)", icon="💰"),
     ]
 )
+
+# Jangan panggil st.set_page_config(layout=...) di halaman: kalau app.py dan
+# halaman sama-sama mengatur layout dalam satu run, frontend Streamlit bisa
+# menelan salah satunya dan layout berganti lebar/sempit tiap klik.
+HALAMAN_LEBAR = {"kartu_konsinyasi"}  # tabel kartu 11 kolom, Sisa Tagihan di kanan
+st.set_page_config(layout="wide" if pg.url_path in HALAMAN_LEBAR else "centered")
 pg.run()

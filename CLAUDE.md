@@ -30,6 +30,8 @@ All three are gitignored. For local dev, drop the two files in the repo root.
 
 `app.py` registers every page via `st.navigation()` pointing at `views/*.py`. Each view is a self-contained script (Streamlit's multipage model — Streamlit re-executes only the selected page top to bottom on each interaction, there's no shared router/class hierarchy). Read the docstring at the top of a view before changing it; most encode a non-obvious business rule (e.g. the cash-reconciliation formula in `laporan_transaksi_harian.py`, the login gate in `pengeluaran_operasional.py`).
 
+**Page layout is set once per run, in `app.py`.** `HALAMAN_LEBAR` lists the pages that get `wide`; every other page is `centered`. Never call `st.set_page_config(layout=...)` inside a page. With two layout calls in one run, Streamlit's frontend sometimes drops one, and the page flips between wide and centered on clicks. This happened on Kartu Konsinyasi on 2026-11-13.
+
 **Widget state does not survive a page switch.**
 - Streamlit drops the state of every widget that isn't rendered in a run. So when someone leaves a page and comes back, its selectboxes fall back to the first option: alphabetically, that is cabang `PIRANHA` and nama `Adi`.
 - Values kept in plain `session_state` keys survive, such as the amounts in Laporan Transaksi Harian.
