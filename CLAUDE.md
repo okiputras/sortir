@@ -113,6 +113,7 @@ The page replaces the paper consignment cards for goods suppliers leave on consi
 - `konsinyasi.untuk_laporan` picks the report: same branch, `Tanggal Bayar` not after the report's date, and not referenced by another report. So each payment lands in exactly one report, the first one saved for that branch after the payment. Editing that report keeps the line.
 - Transfers never go in. Payments without `Dibayar Oleh` (recorded before 2026-11-17) are skipped, because cashiers typed those by hand.
 - Cashiers should no longer type these payments themselves. The page warns when a manual line looks like one (`diketik_ulang`).
+- A saved report never changes by itself. Until the next save, pending payments show as a notice at the top of Laporan Harian, and the Kartu Konsinyasi captions say so. On 2026-11-17 the owner expected an already-saved report to update.
 - Deleting a report frees its payments for the next report. Deleting a visit that is already in a report leaves a stale line until that report is edited and saved; both pages warn about it.
 - **Master edits overwrite from A1** (`simpan_konsinyasi_master`), with no `clear()`. Master rows are never deleted; switch `Aktif` to `Tidak` instead. The page writes back *every* row in its original order, including rows without an ID, because skipping a row would shift the rest and leave duplicates.
 - **IDs carry a letter prefix.** Supplier IDs start with `S`, product IDs with `P`, because `numericise_all` turns IDs like `1e5…` into floats.

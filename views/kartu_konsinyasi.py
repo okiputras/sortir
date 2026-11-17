@@ -56,6 +56,16 @@ def sekarang() -> datetime:
     return datetime.now(JAKARTA)
 
 
+def catatan_tunai(cabang: str, atas_nama: str) -> str:
+    """Penjelasan ke mana uang tunai ke supplier dicatat (lihat konsinyasi.untuk_laporan):
+    tidak langsung mengubah laporan yang sudah tersimpan."""
+    return (
+        f"Uang tunai ini masuk ke Laporan Harian {cabang} berikutnya yang disimpan, sebagai pengeluaran "
+        f"atas nama {atas_nama}. Kalau laporan shift ini sudah tersimpan, buka laporan itu lalu Edit sesi ini "
+        "→ Simpan. Jangan diketik lagi di laporan."
+    )
+
+
 # --- init session state ---
 if "kons_versi" not in st.session_state:
     st.session_state.kons_versi = 0
@@ -243,10 +253,7 @@ with tab_catat:
                         f"Tagihan sebelumnya tetap {rupiah(utang_total)}."
                     )
                 if K.dibayar_tunai({"Status Bayar": status}) and total > 0:
-                    st.caption(
-                        f"Uang tunai ini otomatis masuk Laporan Harian {cabang} sebagai pengeluaran, "
-                        "atas nama petugas. Jangan diketik lagi di laporan."
-                    )
+                    st.caption(catatan_tunai(cabang, petugas or "petugas"))
                 setuju = st.checkbox("Supplier sudah melihat jumlah ini dan setuju", key=f"kons_setuju_{versi}")
                 catatan = st.text_input("Catatan (opsional)", key=f"kons_catatan_{versi}")
                 kurang = [t for t, ok in (("pilih nama petugas", petugas), ("centang persetujuan supplier", setuju)) if not ok]
@@ -285,6 +292,8 @@ with tab_catat:
                         append_konsinyasi(rows)
                     st.session_state.kons_pesan = (
                         f"Kunjungan {nama_supplier(sid)} tersimpan: {rupiah(total)} ({status.lower()})."
+                        + (f" Menunggu Laporan Harian {cabang} berikutnya yang disimpan."
+                           if K.dibayar_tunai({"Status Bayar": status}) and total > 0 else "")
                     )
                     st.session_state.kons_versi += 1
                     st.rerun()
@@ -364,7 +373,7 @@ with tab_kartu:
                     key=f"kons_oleh_{sid_k}_{versi}",
                 )
                 if K.dibayar_tunai({"Status Bayar": cara}):
-                    st.caption(f"Uang tunai ini otomatis masuk Laporan Harian {cabang} sebagai pengeluaran. Jangan diketik lagi di laporan.")
+                    st.caption(catatan_tunai(cabang, oleh or "yang membayar"))
                 jumlah = sum(K.tagihan(s) for s in utang if s["Session ID"] in dipilih)
                 if st.button(
                     f"Tandai dibayar · {rupiah(jumlah)}", type="primary", disabled=not (dipilih and oleh), key=f"kons_bayar_{sid_k}"
@@ -373,6 +382,7 @@ with tab_kartu:
                         bayar_konsinyasi(dipilih, cara, tgl_bayar.isoformat(), oleh)
                     st.session_state.kons_pesan = (
                         f"{len(dipilih)} kunjungan {nama_supplier(sid_k)} ditandai {cara.lower()} oleh {oleh}: {rupiah(jumlah)}."
+                        + (f" Menunggu Laporan Harian {cabang} berikutnya yang disimpan." if K.dibayar_tunai({"Status Bayar": cara}) else "")
                     )
                     st.session_state.kons_versi += 1
                     st.rerun()

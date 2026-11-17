@@ -167,6 +167,22 @@ nama = ingat_pilihan.selectbox(
     disabled=is_editing, help="Batal edit dulu untuk ganti nama." if is_editing else None,
 )
 
+# Pembayaran tunai konsinyasi yang belum masuk laporan mana pun: laporan yang
+# sudah tersimpan tidak berubah sendiri, jadi beri tahu di atas, sebelum riwayat.
+menunggu = K.untuk_laporan(kunjungan, laporan_records, cabang, tanggal.isoformat()) if cabang else []
+if menunggu:
+    jumlah_menunggu = format_rupiah(sum(p["Bayar"] for p in menunggu))
+    st.info(
+        f"Ada {len(menunggu)} pembayaran supplier titipan tunai ({jumlah_menunggu}) yang belum masuk laporan "
+        f"{cabang} mana pun. "
+        + (
+            "Pembayaran itu ikut tersimpan di laporan yang sedang diedit ini."
+            if is_editing
+            else "Pembayaran itu ikut tersimpan saat Anda menyimpan laporan: laporan baru di bawah, "
+            "atau laporan shift ini lewat Edit sesi ini → Simpan."
+        )
+    )
+
 st.divider()
 
 # --- history 2 sesi terakhir ---
