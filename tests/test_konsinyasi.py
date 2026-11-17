@@ -94,6 +94,33 @@ def test_tagihan_menumpuk_dan_sisa_tagihan_berjalan():
     assert K.belum_lunas({"Status Bayar": "belum dibayar"}) and not K.belum_lunas({"Status Bayar": "Dibayar tunai"})
 
 
+def test_pembayaran_tunai_masuk_tepat_satu_laporan():
+    def tunai(sesi, tanggal, bayar, oleh="Meisya", produk="lontong", status="Dibayar tunai", cabang="SULFAT", tgl_bayar=None):
+        return {**_kunjungan(sesi, tanggal, "9:00:00", 10, 1, bayar, status, cabang=cabang),
+                "Produk": produk, "Dibayar Oleh": oleh, "Tanggal Bayar": tgl_bayar or tanggal}
+    data = [
+        tunai("t1", "2026-11-17", 25000),
+        {**tunai("t1", "2026-11-17", 5000, produk="botok"), "Produk ID": "P2"},  # produk kedua kunjungan t1
+        tunai("t2", "2026-11-17", 9000, oleh="Oki", status="Dibayar transfer"),  # transfer: bukan dari laci
+        tunai("t3", "2026-11-17", 8000, oleh="", status="Belum dibayar"),
+        tunai("t4", "2026-11-17", 7000, oleh=""),  # tunai lama, sebelum kolom Dibayar Oleh ada
+        tunai("t5", "2026-11-17", 6000, oleh="Hasan", cabang="PIRANHA"),
+        tunai("t6", "2026-11-18", 4000, tgl_bayar="2026-11-18"),  # besok
+        tunai("t7", "2026-11-15", 3000, oleh="Rani", tgl_bayar="2026-11-16"),  # tagihan lama dilunasi kemarin
+    ]
+    p = K.untuk_laporan(data, [], "SULFAT", "2026-11-17")
+    assert [(x["Session ID"], x["Bayar"]) for x in p] == [("t7", 3000.0), ("t1", 30000.0)]
+    assert p[1]["Produk"] == ["lontong", "botok"]
+    assert K.keterangan_laporan(p[1], "2026-11-17") == "Konsinyasi Bu Sri (dibayar Meisya)"
+    assert K.keterangan_laporan(p[0], "2026-11-17") == "Konsinyasi Bu Sri (dibayar Rani), tgl 2026-11-16"
+    laporan = [{"Session ID": "L1", "Ref Konsinyasi": "t1"}, {"Session ID": "L1", "Ref Konsinyasi": ""}]
+    assert [x["Session ID"] for x in K.untuk_laporan(data, laporan, "SULFAT", "2026-11-17")] == ["t7"]
+    assert [x["Session ID"] for x in K.untuk_laporan(data, laporan, "SULFAT", "2026-11-17", "L1")] == ["t7", "t1"]
+    assert [x["Session ID"] for x in K.untuk_laporan(data, laporan, "SULFAT", "2026-11-17", "L2")] == ["t7"]
+    assert [x["Session ID"] for x in K.untuk_laporan(data, [], "PIRANHA", "2026-11-17")] == ["t5"]
+    assert K.diketik_ulang("BOTOK 5.000", p) is p[1] and K.diketik_ulang("telur", p) is None
+
+
 def test_angka_dari_sel():
     assert K.angka("2,5") == 2.5 and K.angka("12") == 12.0 and K.angka(7) == 7.0
     assert K.angka("") is None and K.angka(None) is None and K.angka(float("nan")) is None and K.angka("abc") is None

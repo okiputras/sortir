@@ -31,6 +31,7 @@ from gsheet_client import (
     bayar_konsinyasi,
     delete_konsinyasi,
     load_all_konsinyasi,
+    load_laporan,
     simpan_konsinyasi_master,
     tambah_konsinyasi_master,
 )
@@ -89,6 +90,8 @@ def nama_supplier(sid) -> str:
 
 if "kons_pesan" in st.session_state:
     st.success(st.session_state.pop("kons_pesan"))
+if "kons_peringatan" in st.session_state:
+    st.warning(st.session_state.pop("kons_peringatan"))
 
 # Cabang, tanggal & petugas lewat ingat_pilihan: tetap sama setelah pindah
 # halaman lalu kembali, dan cabang tidak diam-diam jatuh ke opsi pertama.
@@ -239,6 +242,11 @@ with tab_catat:
                         f"Yang dibayar sekarang hanya kunjungan ini ({rupiah(total)}). "
                         f"Tagihan sebelumnya tetap {rupiah(utang_total)}."
                     )
+                if K.dibayar_tunai({"Status Bayar": status}) and total > 0:
+                    st.caption(
+                        f"Uang tunai ini otomatis masuk Laporan Harian {cabang} sebagai pengeluaran, "
+                        "atas nama petugas. Jangan diketik lagi di laporan."
+                    )
                 setuju = st.checkbox("Supplier sudah melihat jumlah ini dan setuju", key=f"kons_setuju_{versi}")
                 catatan = st.text_input("Catatan (opsional)", key=f"kons_catatan_{versi}")
                 kurang = [t for t, ok in (("pilih nama petugas", petugas), ("centang persetujuan supplier", setuju)) if not ok]
@@ -269,6 +277,7 @@ with tab_catat:
                             "Catatan": catatan.strip(),
                             "Timestamp": waktu,
                             "Tanggal Bayar": "" if status.startswith("Belum") else tanggal.isoformat(),
+                            "Dibayar Oleh": "" if status.startswith("Belum") else petugas,
                         }
                         for b in isi
                     ]
@@ -350,12 +359,20 @@ with tab_kartu:
                 c1, c2 = st.columns(2)
                 cara = c1.radio("Dibayar dengan", K.STATUS_BAYAR[:2], horizontal=True, key=f"kons_cara_{sid_k}")
                 tgl_bayar = c2.date_input("Tanggal bayar", value=sekarang().date(), key=f"kons_tgl_bayar_{sid_k}_{versi}")
+                oleh = st.selectbox(
+                    "Dibayar oleh", karyawan_list, index=None, placeholder="Pilih nama yang membayar",
+                    key=f"kons_oleh_{sid_k}_{versi}",
+                )
+                if K.dibayar_tunai({"Status Bayar": cara}):
+                    st.caption(f"Uang tunai ini otomatis masuk Laporan Harian {cabang} sebagai pengeluaran. Jangan diketik lagi di laporan.")
                 jumlah = sum(K.tagihan(s) for s in utang if s["Session ID"] in dipilih)
-                if st.button(f"Tandai dibayar · {rupiah(jumlah)}", type="primary", disabled=not dipilih, key=f"kons_bayar_{sid_k}"):
+                if st.button(
+                    f"Tandai dibayar · {rupiah(jumlah)}", type="primary", disabled=not (dipilih and oleh), key=f"kons_bayar_{sid_k}"
+                ):
                     with st.spinner("Menyimpan..."):
-                        bayar_konsinyasi(dipilih, cara, tgl_bayar.isoformat())
+                        bayar_konsinyasi(dipilih, cara, tgl_bayar.isoformat(), oleh)
                     st.session_state.kons_pesan = (
-                        f"{len(dipilih)} kunjungan {nama_supplier(sid_k)} ditandai {cara.lower()}: {rupiah(jumlah)}."
+                        f"{len(dipilih)} kunjungan {nama_supplier(sid_k)} ditandai {cara.lower()} oleh {oleh}: {rupiah(jumlah)}."
                     )
                     st.session_state.kons_versi += 1
                     st.rerun()
@@ -377,8 +394,18 @@ with tab_kartu:
                     yakin = st.checkbox("Ya, hapus kunjungan ini", key=f"kons_yakin_{terakhir}", disabled=not boleh)
                     if st.button("Hapus kunjungan", key=f"kons_hapus_{terakhir}", disabled=not (boleh and yakin)):
                         with st.spinner("Menghapus..."):
+                            # Dibaca hanya saat tombol ditekan: pembayaran tunainya
+                            # mungkin sudah masuk Laporan Harian (kolom Ref Konsinyasi).
+                            dilaporkan = [r for r in load_laporan() if str(r.get("Ref Konsinyasi") or "") == terakhir]
                             delete_konsinyasi(terakhir)
                         st.session_state.kons_pesan = "Kunjungan terakhir dihapus."
+                        if dilaporkan:
+                            r0 = dilaporkan[0]
+                            st.session_state.kons_peringatan = (
+                                f"Pembayarannya sudah masuk Laporan Harian {r0.get('Cabang')} tanggal {r0.get('Tanggal')} "
+                                f"({r0.get('Nama')}). Buka laporan itu, klik Edit sesi ini, lalu Simpan supaya baris "
+                                "konsinyasinya ikut hilang."
+                            )
                         st.rerun()
 
 # =========================================================== Rekap bulanan

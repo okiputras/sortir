@@ -177,6 +177,70 @@ def tagihan_per_supplier(kunjungan: list, cabang: str) -> list:
     return sorted(per.values(), key=lambda t: -t["Sisa Tagihan"])
 
 
+def dibayar_tunai(row: dict) -> bool:
+    return str(row.get("Status Bayar", "")).strip().lower() == "dibayar tunai"
+
+
+def pembayaran_tunai(kunjungan: list) -> list:
+    """Satu ringkasan per kunjungan yang dibayar TUNAI (Bayar > 0): uangnya
+    keluar dari laci kasir, jadi harus muncul sebagai pengeluaran di Laporan
+    Harian. Hanya yang tercatat "Dibayar Oleh": pembayaran dari sebelum kolom
+    itu ada sudah diketik manual di laporan, jadi tidak ditarik lagi."""
+    hasil = {}
+    for r in urut(kunjungan):
+        oleh = str(r.get("Dibayar Oleh") or "").strip()
+        if not dibayar_tunai(r) or not oleh:
+            continue
+        p = hasil.setdefault(r["Session ID"], {
+            "Session ID": r["Session ID"], "Cabang": r.get("Cabang"), "Supplier": r.get("Supplier") or "-",
+            "Dibayar Oleh": oleh, "Tanggal Bayar": str(r.get("Tanggal Bayar") or r.get("Tanggal") or ""),
+            "Bayar": 0.0, "Produk": [],
+        })
+        p["Bayar"] += angka(r.get("Bayar")) or 0.0
+        p["Produk"].append(str(r.get("Produk") or ""))
+    return [p for p in hasil.values() if p["Bayar"] > 0]
+
+
+def untuk_laporan(kunjungan: list, laporan: list, cabang: str, tanggal, sesi_laporan=None) -> list:
+    """Pembayaran tunai konsinyasi yang ikut masuk laporan harian `cabang`
+    bertanggal `tanggal`: tanggal bayarnya tidak lewat dari tanggal laporan,
+    dan belum dirujuk laporan lain lewat kolom "Ref Konsinyasi". Jadi tiap
+    pembayaran masuk tepat satu laporan, yaitu laporan pertama cabang itu yang
+    disimpan sesudah pembayarannya (yang terlewat ikut ke laporan berikutnya).
+    Saat mengedit laporan `sesi_laporan`, pembayaran yang sudah dirujuk
+    laporan itu sendiri tetap ikut."""
+    dirujuk = {str(r.get("Ref Konsinyasi") or "").strip(): r.get("Session ID") for r in laporan}
+    dirujuk.pop("", None)
+    batas = kunci_waktu(tanggal, "")[:3]
+    return [
+        p for p in pembayaran_tunai(kunjungan)
+        if p["Cabang"] == cabang
+        and kunci_waktu(p["Tanggal Bayar"], "")[:3] <= batas
+        and (p["Session ID"] not in dirujuk or (sesi_laporan and dirujuk[p["Session ID"]] == sesi_laporan))
+    ]
+
+
+def keterangan_laporan(p: dict, tanggal_laporan) -> str:
+    """Teks baris pengeluaran otomatis di Laporan Harian."""
+    teks = f"Konsinyasi {p['Supplier']} (dibayar {p['Dibayar Oleh']})"
+    if kunci_waktu(p["Tanggal Bayar"], "")[:3] != kunci_waktu(tanggal_laporan, "")[:3]:
+        teks += f", tgl {p['Tanggal Bayar']}"
+    return teks
+
+
+def diketik_ulang(keterangan, pembayaran: list):
+    """Pembayaran otomatis yang tampaknya juga diketik manual di baris
+    pengeluaran `keterangan` (nama supplier atau produknya ada di teks itu),
+    atau None."""
+    teks = str(keterangan or "").lower()
+    for p in pembayaran:
+        for nama in [p["Supplier"], *p["Produk"]]:
+            nama = str(nama or "").strip().lower()
+            if len(nama) >= 4 and nama in teks:
+                return p
+    return None
+
+
 def rekap(kunjungan: list, cabang: str, bulan: str) -> list:
     """Ringkasan per supplier untuk cabang & bulan "YYYY-MM"."""
     per = {}

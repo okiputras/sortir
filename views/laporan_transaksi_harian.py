@@ -7,6 +7,12 @@ Rumus Total:
       (Jumlah pengeluaran tidak dikurangi lagi karena sudah dibayar dari Petty Cash)
 
 Modal dan Tarik Tunai / Tukar Uang cuma informasi -- tidak mempengaruhi Total.
+
+Pembayaran TUNAI ke supplier titipan yang dicatat di Kartu Konsinyasi masuk
+otomatis sebagai baris pengeluaran (kolom "Ref Konsinyasi" = kunjungannya),
+tepat di satu laporan: laporan pertama cabang itu yang disimpan sesudah
+pembayarannya (konsinyasi.untuk_laporan). Baris itu tidak bisa diubah di
+tabel pengeluaran; kasir tidak perlu mengetiknya lagi.
 """
 
 import re
@@ -18,6 +24,7 @@ import pandas as pd
 import streamlit as st
 
 import ingat_pilihan
+import konsinyasi as K
 from gsheet_client import (
     append_laporan,
     delete_laporan,
@@ -124,6 +131,7 @@ except RuntimeError as e:
 cabang_records = data["cabang"]
 karyawan_records = data["karyawan"]
 laporan_records = data["laporan"]
+kunjungan = data["kunjungan"]
 
 if not cabang_records or not karyawan_records:
     st.warning(
@@ -183,6 +191,15 @@ if not hist.empty:
 
         with st.expander(f"{tgl} — Total {format_rupiah(total_val)}"):
             items = sess_rows[sess_rows["Keterangan"].astype(str).str.strip() != ""]
+            # Baris otomatis dari Kartu Konsinyasi (Ref Konsinyasi terisi) tidak
+            # ikut dimuat ke tabel saat diedit: diambil ulang dari kunjungannya.
+            ref = items.get("Ref Konsinyasi", pd.Series("", index=items.index)).fillna("").astype(str).str.strip()
+            manual = items[ref == ""]
+            if set(ref[ref != ""]) - {r["Session ID"] for r in kunjungan}:
+                st.warning(
+                    "Ada pembayaran konsinyasi di laporan ini yang kunjungannya sudah dihapus. "
+                    "Klik Edit sesi ini lalu Simpan supaya laporannya ikut diperbarui."
+                )
             if not items.empty:
                 st.write("Pengeluaran:")
                 st.dataframe(
@@ -213,7 +230,7 @@ if not hist.empty:
 
             bcol1, bcol2 = st.columns(2)
             if bcol1.button("Edit sesi ini", key=f"lap_edit_{sid}", width="stretch"):
-                item_rows = items[["Keterangan", "Nominal"]].copy()
+                item_rows = manual[["Keterangan", "Nominal"]].copy()
                 item_rows["Nominal"] = pd.to_numeric(item_rows["Nominal"], errors="coerce")
                 st.session_state.lap_pengeluaran = item_rows.reset_index(drop=True)
                 st.session_state.lap_tanggal = pd.to_datetime(tgl).date()
@@ -285,6 +302,30 @@ for _, row in edited.iterrows():
     jumlah_pengeluaran += nom
     pengeluaran_rows.append({"Keterangan": ket, "Nominal": nom})
 
+otomatis = (
+    K.untuk_laporan(kunjungan, laporan_records, cabang, tanggal.isoformat(), st.session_state.lap_editing_id)
+    if cabang else []
+)
+if otomatis:
+    st.markdown("**Pembayaran supplier titipan, otomatis dari Kartu Konsinyasi**")
+    st.dataframe(
+        pd.DataFrame(
+            [{"Keterangan": K.keterangan_laporan(p, tanggal.isoformat()), "Nominal": p["Bayar"]} for p in otomatis]
+        ),
+        hide_index=True,
+        width="stretch",
+        column_config={"Nominal": st.column_config.NumberColumn(format=RUPIAH_COL_FORMAT)},
+    )
+    st.caption("Sudah ikut dihitung di Jumlah Pengeluaran. Jangan diketik lagi di tabel atas.")
+    jumlah_pengeluaran += sum(p["Bayar"] for p in otomatis)
+    for r in pengeluaran_rows:
+        mirip = K.diketik_ulang(r["Keterangan"], otomatis)
+        if mirip:
+            st.warning(
+                f"\"{r['Keterangan']}\" sepertinya pembayaran {mirip['Supplier']} yang sudah otomatis masuk. "
+                "Kalau sama, hapus baris itu supaya tidak terhitung dua kali."
+            )
+
 st.markdown(f"**Jumlah Pengeluaran: {format_rupiah(jumlah_pengeluaran)}**")
 
 pakai_petty_cash = petty_awal > 0
@@ -344,12 +385,15 @@ if st.button("Simpan", type="primary", width="stretch", disabled=not (cabang and
         "Timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
-    if pengeluaran_rows:
-        new_rows = [
-            dict(common, Keterangan=r["Keterangan"], Nominal=r["Nominal"])
-            for r in pengeluaran_rows
-        ]
-    else:
+    new_rows = [
+        dict(common, Keterangan=r["Keterangan"], Nominal=r["Nominal"])
+        for r in pengeluaran_rows
+    ] + [
+        dict(common, Keterangan=K.keterangan_laporan(p, tanggal.isoformat()), Nominal=p["Bayar"],
+             **{"Ref Konsinyasi": p["Session ID"]})
+        for p in otomatis
+    ]
+    if not new_rows:
         new_rows = [dict(common, Keterangan="", Nominal=0)]
 
     with st.spinner("Menyimpan..."):

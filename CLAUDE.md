@@ -105,8 +105,15 @@ The page replaces the paper consignment cards for goods suppliers leave on consi
 
 **Rules that are easy to break:**
 - **Delete only the latest visit.** Each row stores its own `Stok Lama` snapshot, so deleting a middle visit breaks every later one. Staff can delete only today's visit; older ones need owner login.
-- **Paying edits cells in place.** `bayar_konsinyasi` sets `Status Bayar` and `Tanggal Bayar` on the rows of the chosen visits; it does not delete and re-append them. Several accumulated visits can therefore be settled at once, with row order and `Timestamp` unchanged. It still holds the `_Lock`, because a concurrent delete shifts row numbers.
-- **New log columns go at the end only.** `Tanggal Bayar` was added after launch as the last column. Monthly tabs created earlier have 19 columns, and `_pastikan_header_konsinyasi` extends their header in place the first time the app saves or pays into them. Add any future column the same way: at the end, never in the middle.
+- **Paying edits cells in place.** `bayar_konsinyasi` sets `Status Bayar`, `Tanggal Bayar` and `Dibayar Oleh` on the rows of the chosen visits; it does not delete and re-append them. Several accumulated visits can therefore be settled at once, with row order and `Timestamp` unchanged. It still holds the `_Lock`, because a concurrent delete shifts row numbers.
+- **New log columns go at the end only.** Columns added after launch sit at the end: `Tanggal Bayar` and `Dibayar Oleh` in Konsinyasi, and `Ref Konsinyasi` in Laporan Harian. `_pastikan_header` extends an older monthly tab's header in place the first time the app saves or pays into it. Add any future column the same way: at the end, never in the middle.
+
+**Cash payments flow into Laporan Harian.** A visit paid "Dibayar tunai" is money out of the cash drawer. That covers a visit paid on the spot (`Dibayar Oleh` = the petugas) and one settled later via Bayar tagihan, where "Dibayar oleh" must be picked.
+- Laporan Transaksi Harian adds each such payment as a read-only pengeluaran line, "Konsinyasi <supplier> (dibayar <name>)". The line's `Ref Konsinyasi` holds the visit's Session ID.
+- `konsinyasi.untuk_laporan` picks the report: same branch, `Tanggal Bayar` not after the report's date, and not referenced by another report. So each payment lands in exactly one report, the first one saved for that branch after the payment. Editing that report keeps the line.
+- Transfers never go in. Payments without `Dibayar Oleh` (recorded before 2026-11-17) are skipped, because cashiers typed those by hand.
+- Cashiers should no longer type these payments themselves. The page warns when a manual line looks like one (`diketik_ulang`).
+- Deleting a report frees its payments for the next report. Deleting a visit that is already in a report leaves a stale line until that report is edited and saved; both pages warn about it.
 - **Master edits overwrite from A1** (`simpan_konsinyasi_master`), with no `clear()`. Master rows are never deleted; switch `Aktif` to `Tidak` instead. The page writes back *every* row in its original order, including rows without an ID, because skipping a row would shift the rest and leave duplicates.
 - **IDs carry a letter prefix.** Supplier IDs start with `S`, product IDs with `P`, because `numericise_all` turns IDs like `1e5…` into floats.
 - **Supplier rows stay text.** They are written with `RAW` and read back without numericise, so a phone number like `0812…` keeps its leading zero.
