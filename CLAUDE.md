@@ -11,7 +11,8 @@ A Streamlit app for Airin Fresh Mart, a 2-branch grocery/vegetable store (**SULF
 - Install deps: `pip install -r requirements.txt`
 - Run the app: `streamlit run app.py` (needs Google Sheets credentials — see below)
 - One-time new-spreadsheet bootstrap: `python3 setup_gsheet.py` (creates the base tabs; see caveat under Data model)
-- Re-sync `PenjualanBulanan` from raw Kasir Pintar exports: `python3 backfill_penjualan.py` (add `--dry-run` to preview, `--cabang SULFAT|PIRANHA` to limit to one branch)
+- Re-sync `PenjualanBulanan` from raw Kasir Pintar exports: `python3 backfill_penjualan.py`. It always rewrites both branches; add `--dry-run` to preview. There is no per-branch option.
+- Move new Kasir Pintar exports from `~/Downloads` into `data-sulfat/` / `data-piranha/`: `python3 ambil_unduhan.py --pindah`. It then runs the backfill once. `--tanpa-backfill` skips that step, and `--salin` (copy instead of move) never runs it.
 - Deploy target is Railway (see `Procfile`); no separate build step.
 - Tests: only the consignment math has them. Run `python3 tests/test_konsinyasi.py`, or `pytest tests/` if pytest is installed; neither needs Google Sheets. No linter or type checker is configured.
 

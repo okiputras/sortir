@@ -169,11 +169,17 @@ def main():
         return
     if a.salin:
         return                      # menyalin = uji coba, jangan sentuh sheet
-    cab = sorted({"SULFAT" if "sulfat" in t else "PIRANHA" for _, t in siap})
-    for c in cab:
-        print(f"\n--- backfill {c} ---")
-        subprocess.run([sys.executable, os.path.join(DIR, "backfill_penjualan.py"),
-                        "--cabang", c], check=False)
+    # SEKALI untuk dua cabang: backfill_penjualan.py selalu menulis ulang seluruh
+    # PenjualanBulanan dari data-sulfat/ dan data-piranha/, dan tidak punya
+    # --cabang. Dulu dipanggil per cabang dengan --cabang, jadi selalu ditolak
+    # argparse dan sinkron otomatis ini tidak pernah jalan (ketahuan 2026-11-20).
+    print("\n--- backfill PenjualanBulanan (SULFAT & PIRANHA) ---")
+    hasil = subprocess.run([sys.executable, os.path.join(DIR, "backfill_penjualan.py")], check=False)
+    if hasil.returncode != 0:
+        print(f"\nBACKFILL GAGAL (kode {hasil.returncode}). PenjualanBulanan belum tersinkron -- "
+              "kalau gagalnya di tengah penulisan, isinya bisa tinggal sebagian. "
+              "Jalankan ulang: python3 backfill_penjualan.py")
+        sys.exit(hasil.returncode)
 
 
 if __name__ == "__main__":
