@@ -34,7 +34,8 @@ biasa utk nambah bulan/cabang berikutnya (ketiga periode sekaligus).
 """
 import json
 import os
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import streamlit as st
@@ -55,6 +56,33 @@ SEED_FILE = os.path.join(os.path.dirname(__file__), "sales_history_seed.json")
 
 def _periode_of(r: dict) -> str:
     return r.get("Periode") or "Total"  # baris lama (sblm kolom ini ada) = Total
+
+
+_AWAL_TANGGAL_SHEETS = datetime(1899, 12, 30)  # nomor seri tanggal 0 di Google Sheets
+
+
+def _bulan_rapi(nilai):
+    """Bulan selalu 'YYYY-MM', apa pun format sel yang kebetulan terbaca.
+
+    Kolom Bulan ditulis USER_ENTERED, jadi Sheets menyimpan '2026-09' sebagai
+    TANGGAL dan teks yang terbaca balik ikut format selnya -- clear() tidak
+    menghapus format, jadi format lama menempel ke baris baru. Kejadian 1 Nov
+    2026: sel berformat 'yyyy-m' bikin sebagian September PIRANHA terbaca
+    '2026-9'. Bulan diurutkan sbg teks, jadi '2026-9' dianggap bulan TERBARU
+    (lebih besar dari '2026-10') dgn qty 0 utk kebanyakan produk -- angka siang
+    Jadwal Sayur PIRANHA sepertiga terlalu kecil sampai 20 Nov. Yang dirapikan:
+    '2026-9', '2026-09-01', dan nomor seri tanggal (kalau formatnya jadi angka)."""
+    if isinstance(nilai, (int, float)) and not isinstance(nilai, bool) and nilai > 0:
+        return (_AWAL_TANGGAL_SHEETS + timedelta(days=nilai)).strftime("%Y-%m")
+    m = re.fullmatch(r"\s*(\d{4})-(\d{1,2})(?:-\d{1,2})?\s*", str(nilai))
+    return f"{m.group(1)}-{int(m.group(2)):02d}" if m else nilai
+
+
+def _rapikan(rows: list[dict]) -> list[dict]:
+    for r in rows:
+        if "Bulan" in r:
+            r["Bulan"] = _bulan_rapi(r["Bulan"])
+    return rows
 
 
 def _load_seed_json() -> dict:
@@ -99,7 +127,7 @@ def load_all() -> list[dict]:
     berubah saat upload/backfill; tulisan lewat aplikasi membersihkan cache
     ini sendiri (replace_month, ensure_periode_seeded). Sesudah
     backfill_penjualan.py dari lokal, angka baru muncul paling lambat 10 menit."""
-    return _ws().get_all_records()
+    return _rapikan(_ws().get_all_records())
 
 
 def ensure_periode_seeded(cabang: str) -> None:
@@ -143,8 +171,9 @@ def replace_month(cabang: str, bulan: str, qty_per_produk: dict, hari: int,
     """Timpa data (cabang, bulan, periode) ini dengan hasil parse baru --
     periode lain (mis. Total tetap utuh saat yang ditimpa cuma Pagi) tidak
     kesenggol. qty_per_produk: {nama_produk_asli: qty_total}."""
+    bulan = _bulan_rapi(bulan)
     ws = _ws()
-    existing = ws.get_all_records()
+    existing = _rapikan(ws.get_all_records())  # '2026-9' lama ikut tertimpa, bukan tertinggal dobel
     ts = datetime.now(JAKARTA).strftime("%Y-%m-%d %H:%M:%S")
     kept = [r for r in existing
             if not (r.get("Cabang") == cabang and r.get("Bulan") == bulan

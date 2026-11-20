@@ -14,7 +14,7 @@ A Streamlit app for Airin Fresh Mart, a 2-branch grocery/vegetable store (**SULF
 - Re-sync `PenjualanBulanan` from raw Kasir Pintar exports: `python3 backfill_penjualan.py`. It always rewrites both branches; add `--dry-run` to preview. There is no per-branch option.
 - Move new Kasir Pintar exports from `~/Downloads` into `data-sulfat/` / `data-piranha/`: `python3 ambil_unduhan.py --pindah`. It then runs the backfill once. `--tanpa-backfill` skips that step, and `--salin` (copy instead of move) never runs it.
 - Deploy target is Railway (see `Procfile`); no separate build step.
-- Tests: only the consignment math has them. Run `python3 tests/test_konsinyasi.py`, or `pytest tests/` if pytest is installed; neither needs Google Sheets. No linter or type checker is configured.
+- Tests cover only the consignment math and the month labels of the sales history. Run `python3 tests/test_konsinyasi.py` and `python3 tests/test_sales_history.py`, or `pytest tests/` if pytest is installed. None of them needs Google Sheets. No linter or type checker is configured.
 
 ## Credentials
 
@@ -83,9 +83,14 @@ The sheet is auto-seeded from `sales_history_seed.json` (pre-aggregated from `da
 
 `trend_avg_qty()` is the forecasting primitive both Jadwal Sayur and Proyeksi Stok Habis build on: it returns a flat average (qty/day) alongside a trend-adjusted value (simple linear regression over monthly qty/day, evaluated at the *last observed* month — not extrapolated forward, deliberately conservative) so a branch with real momentum isn't dragged toward a stale flat average. Falls back to the flat average below `min_bulan_tren` (default 3) months of history for a product.
 
+**Month labels go through `_bulan_rapi`.**
+- `Bulan` is written USER_ENTERED, so Sheets stores it as a date, and the text read back follows the cell's number format. `clear()` keeps formats.
+- On 2026-11-01 a leftover `yyyy-m` format made part of PIRANHA's September read as `2026-9`. Months sort as text, so `2026-9` counted as the newest month, and most products had 0 in it. PIRANHA's noon numbers in Jadwal Sayur stayed about a third too low until 2026-11-20.
+- `load_all` and `replace_month` now normalize every `Bulan` to `YYYY-MM`. Any new reader of this sheet must go through `load_all` or `_rapikan`.
+
 ### Buffer & rounding conventions (shared by Jadwal Sayur and Proyeksi Stok Habis)
 
-Both features take `trend_avg_qty`'s trend value, add a safety buffer %, then round: kg-based quantities stay decimal (a fractional kg is real), satuan quantities round **up** (`math.ceil`) since "3.6 pcs" isn't actionable and over-preparing beats running out. Buffer % is hardcoded per `(cabang, tipe)` in each view's `DEFAULT_BUFFER` dict (`views/jadwal_sayur.py`, `views/update_harga.py`) — currently SULFAT 40%/20% and PIRANHA 50%/20% (kg/satuan). These came from a walk-forward backtest against real transaction data (hold out recent months, compare predicted vs. actual, find the buffer where accuracy stops improving cheaply), not from guessing — re-derive them the same way if they ever need revisiting rather than eyeballing new values.
+Both features take `trend_avg_qty`'s trend value, add a safety buffer %, then round: kg-based quantities stay decimal (a fractional kg is real), satuan quantities round **up** (`math.ceil`) since "3.6 pcs" isn't actionable and over-preparing beats running out. Buffer % is hardcoded per `(cabang, tipe)` in each view's `DEFAULT_BUFFER` dict (`views/jadwal_sayur.py`, `views/update_harga.py`) — currently SULFAT 40%/20% and PIRANHA 55%/20% (kg/satuan). These came from a walk-forward backtest against real transaction data (hold out recent months, compare predicted vs. actual, find the buffer where accuracy stops improving cheaply), not from guessing — re-derive them the same way if they ever need revisiting rather than eyeballing new values.
 
 ### Kasir Pintar transaction data (`sales_upload.py`)
 
